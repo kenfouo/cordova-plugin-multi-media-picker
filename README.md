@@ -3,7 +3,7 @@
 Cordova Media Picker lets users select multiple images and videos with a simple Promise-based API:
 - iOS: uses PHPicker (modern, no deprecated UI, respects selectionLimit).
 - Android: uses a custom in‑app picker (enforces selectionLimit) or system picker (limit trimmed).
-- Returns array of `{ index, uri, fileName, fileSize, type, width?, height?, duration? }` (files copied into app cache).
+- Returns array of `{ index, uri, fileName, fileSize, mimeType, type, width?, height?, duration? }` (files copied into app cache).
 - Optional loader overlay while files are processed.
 
 Requirements: Cordova iOS 6+, Cordova Android 11+. Platforms supported:
@@ -56,6 +56,7 @@ interface MediaPickerResult {
   uri: string;            // file:// path to cached copy
   fileName: string;       // original filename
   fileSize: number;       // bytes
+  mimeType: string;      // e.g., image/jpeg, video/mp4
   type: 'image' | 'video' | 'other';
   width?: number;         // images & videos
   height?: number;        // images & videos

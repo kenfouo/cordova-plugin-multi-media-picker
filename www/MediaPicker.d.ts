@@ -26,6 +26,8 @@ export interface MediaPickerResult {
   fileName: string;
   /** File size in bytes */
   fileSize: number;
+  /** MIME type like image/jpeg or video/mp4 */
+  mimeType: string;
   /** Media type classification */
   type: 'image' | 'video' | 'other';
   /** Pixel width (images/videos only) */

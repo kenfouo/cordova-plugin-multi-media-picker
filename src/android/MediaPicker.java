@@ -206,46 +206,77 @@ public class MediaPicker extends CordovaPlugin {
                 fileSize = dest.length();
             }
 
-            String mime = cordova.getContext().getContentResolver().getType(uri);
+            String mime = resolveMime(uri, dest, ext);
             String type = "other";
-
             JSONObject obj = new JSONObject();
+            if (mime.startsWith("image/")) {
+                type = "image";
+                BitmapFactory.Options options = new BitmapFactory.Options();
+                options.inJustDecodeBounds = true;
+                BitmapFactory.decodeFile(dest.getAbsolutePath(), options);
+                obj.put("width", options.outWidth);
+                obj.put("height", options.outHeight);
+            } else if (mime.startsWith("video/")) {
+                type = "video";
+                try (MediaMetadataRetriever retriever = new MediaMetadataRetriever()) {
+                    retriever.setDataSource(dest.getAbsolutePath());
+                    String w = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH);
+                    String h = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT);
+                    String d = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
+                    if (w != null) obj.put("width", Integer.parseInt(w));
+                    if (h != null) obj.put("height", Integer.parseInt(h));
+                    if (d != null) obj.put("duration", Long.parseLong(d) / 1000.0);
+                }
+            }
+
             obj.put("index", index);
             obj.put("uri", "file://" + dest.getAbsolutePath());
             obj.put("fileName", fileName);
             obj.put("fileSize", fileSize);
-
-            if (mime != null) {
-                if (mime.startsWith("image/")) {
-                    type = "image";
-                    BitmapFactory.Options options = new BitmapFactory.Options();
-                    options.inJustDecodeBounds = true;
-                    BitmapFactory.decodeFile(dest.getAbsolutePath(), options);
-                    obj.put("width", options.outWidth);
-                    obj.put("height", options.outHeight);
-                } else if (mime.startsWith("video/")) {
-                    type = "video";
-                    try (MediaMetadataRetriever retriever = new MediaMetadataRetriever()) {
-                        retriever.setDataSource(dest.getAbsolutePath());
-
-                        String w = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH);
-                        String h = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT);
-                        String d = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
-
-                        if (w != null) obj.put("width", Integer.parseInt(w));
-                        if (h != null) obj.put("height", Integer.parseInt(h));
-                        if (d != null) obj.put("duration", Long.parseLong(d) / 1000.0); // seconds
-                    }
-                }
-            }
-
+            obj.put("mimeType", mime);
             obj.put("type", type);
+
             return obj;
 
         } catch (Exception e) {
             errors.add("Item " + index + " copy error: " + e.getMessage());
             return null;
         }
+    }
+
+    private String resolveMime(Uri uri, File dest, String ext) {
+        String mime = cordova.getContext().getContentResolver().getType(uri);
+
+        // Try system type
+        if (mime != null) return mime;
+
+        // Try by extension
+        if (ext != null) {
+            String lower = ext.toLowerCase();
+            switch (lower) {
+                case "jpg":
+                case "jpeg":
+                    return "image/jpeg";
+                case "png":
+                    return "image/png";
+                case "gif":
+                    return "image/gif";
+                case "mp4":
+                    return "video/mp4";
+                case "mov":
+                    return "video/quicktime";
+            }
+        }
+
+        // Try via MediaMetadataRetriever for video
+        try (MediaMetadataRetriever retriever = new MediaMetadataRetriever()) {
+            retriever.setDataSource(dest.getAbsolutePath());
+            String mimeFromMeta = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_MIMETYPE);
+            if (mimeFromMeta != null) return mimeFromMeta;
+        } catch (Exception ignored) {}
+
+        // Fallback
+        return "application/octet-stream";
     }
 
     private String getExtension(Uri uri) {

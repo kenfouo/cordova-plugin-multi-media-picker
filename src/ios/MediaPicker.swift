@@ -87,6 +87,36 @@ class MediaPicker: CDVPlugin, PHPickerViewControllerDelegate {
             self.overlayView?.removeFromSuperview()
         }
     }
+    
+    @available(iOS 14.0, *)
+    private func resolveMime(provider: NSItemProvider, dest: URL) -> String {
+        var candidates: [String] = []
+
+        // iOS 16+: use modern ContentTypes first
+        if #available(iOS 16.0, *) {
+            candidates.append(contentsOf: provider.registeredContentTypes.compactMap { $0.preferredMIMEType })
+        }
+
+        // Always fallback to legacy identifiers
+        candidates.append(contentsOf: provider.registeredTypeIdentifiers.compactMap { UTType($0)?.preferredMIMEType })
+
+        // Add dest file UTI if available
+        if let uti = try? dest.resourceValues(forKeys: [.typeIdentifierKey]).typeIdentifier,
+           let ut = UTType(uti),
+           let mime = ut.preferredMIMEType {
+            candidates.append(mime)
+        }
+
+        // Preferences
+        if candidates.contains("image/jpeg") {
+            return "image/jpeg"
+        }
+        if candidates.contains("video/mp4") {
+            return "video/mp4"
+        }
+
+        return candidates.first ?? "application/octet-stream"
+    }
 
     @available(iOS 14, *)
     func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
@@ -165,7 +195,7 @@ class MediaPicker: CDVPlugin, PHPickerViewControllerDelegate {
                         "fileName": dest.lastPathComponent,
                         "fileSize": (try? fm.attributesOfItem(atPath: dest.path)[.size] as? Int) ?? 0
                     ]
-
+                    info["mimeType"] = self.resolveMime(provider: provider, dest: dest)
                     if isImage {
                         info["type"] = "image"
                         if let img = UIImage(contentsOfFile: dest.path) {
