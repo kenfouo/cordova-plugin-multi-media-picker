@@ -254,4 +254,60 @@ class MediaPicker: CDVPlugin, PHPickerViewControllerDelegate {
             }
         }
     }
+
+    @objc(getExifForKey:)
+    func getExifForKey(command: CDVInvokedUrlCommand) {
+        guard let path = command.argument(at: 0) as? String else {
+            let result = CDVPluginResult(status: .error, messageAs: "Path is missing")
+            self.commandDelegate.send(result, callbackId: command.callbackId)
+            return
+        }
+        
+        // Si la clé est absente, vide ou NSNull, on renvoie un JSON vide directement
+        guard let key = command.argument(at: 1) as? String, !key.isEmpty else {
+            let result = CDVPluginResult(status: .ok, messageAs: "Exif key is required")
+            self.commandDelegate.send(result, callbackId: command.callbackId)
+            return
+        }
+        
+        self.commandDelegate.run {
+            let cleanPath = path.replacingOccurrences(of: "file://", with: "")
+            let fileURL = URL(fileURLWithPath: cleanPath)
+            let isVideo = ["mp4", "mov", "m4v", "3gp"].contains(fileURL.pathExtension.lowercased())
+            
+            var foundValue: Any? = nil
+            
+            if isVideo {
+                // Recherche ciblée dans les métadonnées vidéo
+                let asset = AVAsset(url: fileURL)
+                foundValue = asset.commonMetadata.first(where: { $0.commonKey?.rawValue == key })?.value
+            } else {
+                // Recherche ciblée dans les métadonnées image
+                if let imageSource = CGImageSourceCreateWithURL(fileURL as CFURL, nil),
+                let props = CGImageSourceCopyPropertiesAtIndex(imageSource, 0, nil) as? [String: Any] {
+                    
+                    if let val = props[key] {
+                        foundValue = val
+                    } else if let exif = props[kCGImagePropertyExifDictionary as String] as? [String: Any], let val = exif[key] {
+                        foundValue = val
+                    } else if let tiff = props[kCGImagePropertyTIFFDictionary as String] as? [String: Any], let val = tiff[key] {
+                        foundValue = val
+                    } else if let gps = props[kCGImagePropertyGPSDictionary as String] as? [String: Any], let val = gps[key] {
+                        foundValue = val
+                    }
+                }
+            }
+            
+            // Construction du résultat (Valeur seule ou {} si rien trouvé)
+            let pluginResult: CDVPluginResult
+            if let data = foundValue {
+                // On renvoie la valeur dans son type natif (String, Int, etc.)
+                pluginResult = CDVPluginResult(status: .ok, messageAs: "\(data)")
+            } else {
+                pluginResult = CDVPluginResult(status: .ok, messageAs: [:])
+            }
+            
+            self.commandDelegate.send(pluginResult, callbackId: command.callbackId)
+        }
+    }
 }
