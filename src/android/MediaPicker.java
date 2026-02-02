@@ -129,12 +129,22 @@ public class MediaPicker extends CordovaPlugin {
                 return true;
             }
 
+            if ("null".equals(key) || key == null || key.isEmpty()) {
+                callbackContext.error("Exif key is required");
+                return true;
+            }
+
             cordova.getThreadPool().execute(() -> {
                 try {
                     // Nettoyage de l'URI (enlever file:// si présent)
                     String path = fileUri.replace("file://", "");
-                    String exifData = getExifData(path, key);
-                    callbackContext.success(exifData);
+
+                    // Traitement Image via ExifInterface
+                    ExifInterface exif = new ExifInterface(path);
+
+                    String exifKeyValue = exif.getAttribute(key);
+
+                    callbackContext.success(exifKeyValue);
                 } catch (Exception e) {
                     callbackContext.error("Exif error: " + e.getMessage());
                 }
@@ -372,62 +382,5 @@ public class MediaPicker extends CordovaPlugin {
                 overlaySpinner = null;
             }
         });
-    }
-
-    private String getExifData(String filePath, String targetKey) throws Exception {
-        JSONObject results = new JSONObject();
-        File file = new File(filePath);
-        if (!file.exists()) throw new Exception("File not found");
-
-        // Détection sommaire du type
-        boolean isVideo = filePath.toLowerCase().endsWith(".mp4") || filePath.toLowerCase().endsWith(".mov");
-
-        if (isVideo) {
-            try (MediaMetadataRetriever retriever = new MediaMetadataRetriever()) {
-                retriever.setDataSource(filePath);
-                // Liste des clés communes pour les vidéos
-                int[] keys = {
-                    MediaMetadataRetriever.METADATA_KEY_DURATION,
-                    MediaMetadataRetriever.METADATA_KEY_BITRATE,
-                    MediaMetadataRetriever.METADATA_KEY_CAPTURE_FRAMERATE,
-                    MediaMetadataRetriever.METADATA_KEY_DATE,
-                    MediaMetadataRetriever.METADATA_KEY_LOCATION
-                };
-
-                if (targetKey != null && !targetKey.isEmpty()) {
-                    // Si on cherche une clé spécifique (il faut passer l'ID entier de la constante)
-                    String val = retriever.extractMetadata(Integer.parseInt(targetKey));
-                    return val;
-                } else {
-                    for (int k : keys) {
-                        String val = retriever.extractMetadata(k);
-                        if (val != null) results.put(String.valueOf(k), val);
-                    }
-                }
-            }
-        } else {
-            // Traitement Image via ExifInterface
-            ExifInterface exif = new ExifInterface(filePath);
-            
-            // Liste des tags standards à retourner si aucune clé n'est spécifiée
-            String[] tags = {
-                ExifInterface.TAG_DATETIME, ExifInterface.TAG_MAKE, ExifInterface.TAG_MODEL,
-                ExifInterface.TAG_ORIENTATION, ExifInterface.TAG_IMAGE_WIDTH, ExifInterface.TAG_IMAGE_LENGTH,
-                ExifInterface.TAG_GPS_LATITUDE, ExifInterface.TAG_GPS_LONGITUDE, ExifInterface.TAG_EXPOSURE_TIME,
-                ExifInterface.TAG_F_NUMBER, ExifInterface.TAG_ISO_SPEED_RATINGS
-            };
-
-            if (targetKey != null && !"null".equals(targetKey) && !targetKey.isEmpty()) {
-
-                return exif.getAttribute(targetKey);
-            } else {
-                for (String tag : tags) {
-                    String val = exif.getAttribute(tag);
-
-                    results.put(tag, val);
-                }
-            }
-        }
-        return results.toString();
     }
 }
