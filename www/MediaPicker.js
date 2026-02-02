@@ -12,6 +12,18 @@ MediaPicker.prototype.getMedias = function (opts = {}) {
     });
 };
 
+/**
+ * Get Exif data for a specific file
+ * @param {string} fileUri - The file URI (file://...)
+ * @param {string} [key] - Optional specific Exif tag name
+ */
+MediaPicker.prototype.getExifForKey = function (fileUri, key = null) {
+    return new Promise(function (resolve, reject) {
+        // On passe fileUri et key (qui peut être null)
+        cordova.exec(resolve, reject, 'MediaPicker', 'getExifForKey', [fileUri, key]);
+    });
+};
+
 module.exports = new MediaPicker();
 module.exports.MediaPicker = module.exports;
 
