@@ -51,6 +51,14 @@ public class MediaPicker extends CordovaPlugin {
     private ProgressBar overlaySpinner;
     private boolean isPickerOpen = false;
 
+    private static final int PERMISSION_REQUEST_CODE = 2026;
+    private static final String READ_EXTERNAL_STORAGE = android.Manifest.permission.READ_EXTERNAL_STORAGE;
+    // Pour Android 13+ (API 33)
+    private static final String READ_MEDIA_IMAGES = "android.permission.READ_MEDIA_IMAGES";
+    private static final String READ_MEDIA_VIDEO = "android.permission.READ_MEDIA_VIDEO";
+
+    private JSONArray lastArgs; // Pour stocker les arguments en attente de permission
+
     @Override
     public boolean execute(String action, JSONArray args, final CallbackContext callbackContext) throws JSONException {
         if ("getMedias".equals(action)) {
@@ -133,6 +141,29 @@ public class MediaPicker extends CordovaPlugin {
         }
 
         if ("getLastMedias".equals(action)) {
+            this.callbackContext = callbackContext;
+            this.lastArgs = args; // On stocke les arguments ici
+
+            String[] permissions;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                permissions = new String[]{ 
+                    android.Manifest.permission.READ_MEDIA_IMAGES, 
+                    android.Manifest.permission.READ_MEDIA_VIDEO 
+                };
+            } else {
+                permissions = new String[]{ android.Manifest.permission.READ_EXTERNAL_STORAGE };
+            }
+
+            if (hasPermissions(permissions)) {
+                processGetLastMedias(this.lastArgs);
+            } else {
+                cordova.requestPermissions(this, PERMISSION_REQUEST_CODE, permissions);
+            }
+            return true;
+        }
+
+        /*         
+        if ("getLastMedias".equals(action)) {
             JSONObject opts = args.optJSONObject(0);
             String lastMediaType = "image";
             int limit = 20;
@@ -154,7 +185,7 @@ public class MediaPicker extends CordovaPlugin {
                 }
             });
             return true;
-        }
+        } */
 
         if ("getExifForKey".equals(action)) {
             String fileUri = args.optString(0);
@@ -625,5 +656,58 @@ public class MediaPicker extends CordovaPlugin {
                 overlaySpinner = null;
             }
         });
+    }
+
+    private void processGetLastMedias(JSONArray args) {
+        JSONObject opts = args.optJSONObject(0);
+        String lastMediaType = "image";
+        int limit = 20;
+
+        if (opts != null) {
+            lastMediaType = opts.optString("mediaType", "image");
+            limit = opts.optInt("limit", 20);
+        }
+
+        final String finalMediaType = lastMediaType;
+        final int finalLimit = limit;
+
+        cordova.getThreadPool().execute(() -> {
+            try {
+                JSONArray res = getLastMedias(finalMediaType, finalLimit);
+                callbackContext.success(res);
+            } catch (Exception e) {
+                callbackContext.error(e.getMessage());
+            }
+        });
+    }
+
+    @Override
+    public void onRequestPermissionResult(int requestCode, String[] permissions, int[] grantResults) throws JSONException {
+        if (requestCode == PERMISSION_REQUEST_CODE) {
+            boolean allGranted = true;
+            for (int r : grantResults) {
+                if (r == android.content.pm.PackageManager.PERMISSION_DENIED) {
+                    allGranted = false;
+                    break;
+                }
+            }
+
+            if (allGranted) {
+                // On utilise les arguments stockés précédemment
+                processGetLastMedias(this.lastArgs);
+            } else {
+                this.callbackContext.error("Permission denied by user");
+            }
+            
+            // On nettoie la variable après usage
+            this.lastArgs = null;
+        }
+    }
+
+    private boolean hasPermissions(String[] permissions) {
+        for (String p : permissions) {
+            if (!cordova.hasPermission(p)) return false;
+        }
+        return true;
     }
 }
