@@ -2,33 +2,56 @@ declare namespace CordovaPlugins {
 
   interface MediaPicker {
     /**
-     * Gets the current media items.
-     * Returns a Promise that resolves with an array of MediaPickerResult.
+     * Opens the media picker with the specified options.
+     * Supports both Promise and Callback patterns.
      */
+    getMedias(
+      opts?: MediaPickerOptions,
+      successCallback?: (results: MediaPickerResult[]) => void,
+      errorCallback?: (error: any) => void
+    ): Promise<MediaPickerResult[]>;
+
     /**
-     * Options for `getMedias`.
+     * Retrieves the most recent media items (often used for quick previews).
+     * Supports both Promise and Callback patterns.
      */
-    getMedias(opts?: MediaPickerOptions): Promise<MediaPickerResult[]>;
+    getLastMedias(
+      opts?: MediaPickerOptions,
+      successCallback?: (results: MediaPickerResult[]) => void,
+      errorCallback?: (error: any) => void
+    ): Promise<MediaPickerResult[]>;
+
+    /**
+     * Retrieves EXIF data for a specific file.
+     * @param fileUri The local file URI.
+     * @param key Specific EXIF key (e.g., "DateTime"), or null to retrieve all data.
+     * @param successCallback Function called on success.
+     * @param errorCallback Function called on error.
+     */
+    getExifForKey(
+      fileUri: string,
+      key?: string | null,
+      successCallback?: (data: any) => void,
+      errorCallback?: (error: any) => void
+    ): Promise<any>;
   }
 }
 
 /**
- * Result item returned by getMedias().
- * width / height present for images & videos.
- * duration (in seconds) only for videos.
+ * Result object returned by selection methods.
  */
 export interface MediaPickerResult {
   /** Selection order starting at 0 */
   index: number;
-  /** Local file URI (file://...) pointing to cached copy */
+  /** Local file URI (file://...) pointing to the media */
   uri: string;
-  /** Original (copied) file name */
+  /** Original file name */
   fileName: string;
   /** File size in bytes */
   fileSize: number;
-  /** MIME type like image/jpeg or video/mp4 */
+  /** MIME type (e.g., image/jpeg or video/mp4) */
   mimeType: string;
-  /** Media type classification */
+  /** Media classification */
   type: 'image' | 'video' | 'other';
   /** Pixel width (images/videos only) */
   width?: number;
@@ -39,13 +62,13 @@ export interface MediaPickerResult {
 }
 
 export interface MediaPickerOptions {
-  /** Maximum number of items the user can select (default 3) */
+  /** Maximum number of items the user can select (default: 3) */
   selectionLimit?: number;
-  /** Whether to show an in-app loader while copying files (default true) */
+  /** Whether to show a loading overlay while processing files (default: true) */
   showLoader?: boolean;
-  /** Whether to allow only image selection (default false) */
+  /** Restrict selection to images only (default: false) */
   imageOnly?: boolean;
-  /** Type of media to pick (default 'all') */
+  /** Filter the type of media displayed (default: 'all') */
   mediaType?: 'all' | 'images' | 'videos';
 }
 
@@ -59,6 +82,9 @@ interface Cordova {
 
 declare let cordova: Cordova;
 
+/**
+ * Exports for ES module and global support
+ */
 export const MediaPicker: CordovaPlugins.MediaPicker;
 export as namespace MediaPicker;
 declare const _default: CordovaPlugins.MediaPicker;
