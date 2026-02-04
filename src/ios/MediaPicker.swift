@@ -310,4 +310,157 @@ class MediaPicker: CDVPlugin, PHPickerViewControllerDelegate {
             self.commandDelegate.send(pluginResult, callbackId: command.callbackId)
         }
     }
+
+    @objc(getLastMedias:)
+    func getLastMedias(command: CDVInvokedUrlCommand) {
+        self.commandDelegate.run {
+            let opts = command.argument(at: 0) as? [String: Any] ?? [:]
+            let limit = opts["limit"] as? Int ?? 20
+            let offset = opts["offset"] as? Int ?? 0
+            let mediaType = opts["mediaType"] as? String ?? "all" // "images", "videos", "all"
+
+            let status = PHPhotoLibrary.authorizationStatus()
+            
+            if status == .authorized || status == .limited {
+                self.fetchMediasWithPagination(command: command, limit: limit, offset: offset, mediaType: mediaType)
+            } else {
+                PHPhotoLibrary.requestAuthorization { newStatus in
+                    if newStatus == .authorized || newStatus == .limited {
+                        self.fetchMediasWithPagination(command: command, limit: limit, offset: offset, mediaType: mediaType)
+                    } else {
+                        self.commandDelegate.send(CDVPluginResult(status: .error, messageAs: "Permission denied"), callbackId: command.callbackId)
+                    }
+                }
+            }
+        }
+    }
+
+    private func fetchMediasWithPagination(command: CDVInvokedUrlCommand, limit: Int, offset: Int, mediaType: String) {
+        var assetsList: [[String: Any]] = []
+        let fetchOptions = PHFetchOptions()
+        fetchOptions.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+        
+        // ✅ Filtrage selon le mediaType
+        let allAssets: PHFetchResult<PHAsset>
+        if mediaType == "images" {
+            allAssets = PHAsset.fetchAssets(with: .image, options: fetchOptions)
+        } else if mediaType == "videos" {
+            allAssets = PHAsset.fetchAssets(with: .video, options: fetchOptions)
+        } else {
+            allAssets = PHAsset.fetchAssets(with: fetchOptions)
+        }
+
+        let totalCount = allAssets.count
+        let endIndex = min(offset + limit, totalCount)
+        
+        if offset >= totalCount {
+            self.commandDelegate.send(CDVPluginResult(status: .ok, messageAs: []), callbackId: command.callbackId)
+            return
+        }
+
+        let manager = PHImageManager.default()
+        let fm = FileManager.default
+        let tempDir = fm.temporaryDirectory
+        let semaphore = DispatchSemaphore(value: 0)
+
+        for i in offset..<endIndex {
+            let asset = allAssets.object(at: i)
+            var mediaInfo: [String: Any] = [
+                "index": asset.localIdentifier,
+                "width": asset.pixelWidth,
+                "height": asset.pixelHeight,
+                "creationDate": asset.creationDate?.description ?? "",
+                "type": asset.mediaType == .video ? "video" : "image"
+            ]
+
+            if asset.mediaType == .video {
+                mediaInfo["duration"] = asset.duration
+                let videoOptions = PHVideoRequestOptions()
+                videoOptions.isNetworkAccessAllowed = true
+                
+                // --- Génération de la miniature ---
+                let thumbOptions = PHImageRequestOptions()
+                thumbOptions.isSynchronous = true // On peut rester synchrone ici car c'est rapide pour une miniature
+                thumbOptions.deliveryMode = .highQualityFormat
+                
+                // On demande une taille raisonnable pour la grille (ex: 300x300)
+                manager.requestImage(for: asset, targetSize: CGSize(width: 300, height: 300), contentMode: .aspectFill, options: thumbOptions) { (image, info) in
+                    if let image = image, let data = image.jpegData(compressionQuality: 0.8) {
+                        let thumbName = "thumb_\(UUID().uuidString).jpg"
+                        let thumbURL = tempDir.appendingPathComponent(thumbName)
+                        try? data.write(to: thumbURL)
+                        mediaInfo["thumbnail"] = "file://\(thumbURL.path)"
+                    }
+                }
+                
+                manager.requestAVAsset(forVideo: asset, options: videoOptions) { (avAsset, audioMix, info) in
+                    if let urlAsset = avAsset as? AVURLAsset {
+                        let ext = urlAsset.url.pathExtension
+                        let destURL = tempDir.appendingPathComponent("\(UUID().uuidString).\(ext)")
+                        try? fm.copyItem(at: urlAsset.url, to: destURL)
+                        mediaInfo["uri"] = "file://\(destURL.path)"
+                    }
+                    semaphore.signal()
+                }
+            } else {
+                let imgOptions = PHImageRequestOptions()
+                imgOptions.isSynchronous = false
+                imgOptions.isNetworkAccessAllowed = true
+                
+                manager.requestImageDataAndOrientation(for: asset, options: imgOptions) { (data, uti, orientation, info) in
+                    if let data = data {
+                        let ext = UTType(uti ?? "")?.preferredFilenameExtension ?? "jpg"
+                        let destURL = tempDir.appendingPathComponent("\(UUID().uuidString).\(ext)")
+                        try? data.write(to: destURL)
+                        mediaInfo["uri"] = "file://\(destURL.path)"
+                    }
+                    semaphore.signal()
+                }
+            }
+            
+            semaphore.wait()
+            assetsList.append(mediaInfo)
+        }
+
+        let result = CDVPluginResult(status: .ok, messageAs: assetsList)
+        self.commandDelegate.send(result, callbackId: command.callbackId)
+    }
+
+
+    async function loadLastMedia(type, count) {
+    const medias = await MediaPicker.getLastMedias(type, count);
+    console.log('medias1 : '+JSON.stringify(medias, null, 2));
+
+
+/* 
+    private func fetchPhotosFromLibrary(command: CDVInvokedUrlCommand) {
+        var assetsList: [[String: Any]] = []
+        
+        // Options de tri : on prend les images, triées par date de création (plus récent en premier)
+        let fetchOptions = PHFetchOptions()
+        fetchOptions.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+        
+        let allPhotos = PHAsset.fetchAssets(with: .image, options: fetchOptions)
+        
+        let manager = PHImageManager.default()
+        let requestOptions = PHImageRequestOptions()
+        requestOptions.isSynchronous = true // On le garde synchrone pour la boucle simple, mais attention si la galerie est énorme
+        requestOptions.deliveryMode = .fastFormat
+
+        allPhotos.enumerateObjects { (asset, index, stop) in
+            var photoInfo: [String: Any] = [
+                "localIdentifier": asset.localIdentifier,
+                "width": asset.pixelWidth,
+                "height": asset.pixelHeight,
+                "creationDate": asset.creationDate?.description ?? ""
+            ]
+            
+            // Note : Pour obtenir l'URL du fichier réel ou l'image en base64, 
+            // il faudra faire un appel supplémentaire à requestImageDataAndOrientation
+            assetsList.append(photoInfo)
+        }
+
+        let result = CDVPluginResult(status: .ok, messageAs: assetsList)
+        self.commandDelegate.send(result, callbackId: command.callbackId)
+    } */
 }
