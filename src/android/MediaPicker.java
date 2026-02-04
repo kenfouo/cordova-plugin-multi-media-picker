@@ -12,7 +12,6 @@ import android.widget.FrameLayout;
 import android.widget.ProgressBar;
 import android.graphics.BitmapFactory;
 import android.media.MediaMetadataRetriever;
-import android.media.ExifInterface;
 
 import org.apache.cordova.*;
 import org.json.JSONArray;
@@ -24,6 +23,19 @@ import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.UUID;
+
+import android.graphics.Bitmap;
+import android.media.ThumbnailUtils;
+import android.util.Size;
+
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
+import java.util.function.BiConsumer;
+
+import android.content.ContentResolver;
+import android.content.ContentUris;
+import android.media.ExifInterface;
 
 public class MediaPicker extends CordovaPlugin {
 
@@ -91,7 +103,7 @@ public class MediaPicker extends CordovaPlugin {
 
 
             } else {
-                // ✅ Fallback for Android 10 and below
+                //  Fallback for Android 10 and below
                 intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
                 intent.addCategory(Intent.CATEGORY_OPENABLE);
 
@@ -117,6 +129,30 @@ public class MediaPicker extends CordovaPlugin {
 
             isPickerOpen = true;
             cordova.startActivityForResult(this, intent, REQUEST_CODE);
+            return true;
+        }
+
+        if ("getLastMedias".equals(action)) {
+            JSONObject opts = args.optJSONObject(0);
+            String lastMediaType = "image";
+            int limit = 20;
+
+            if (opts != null) {
+                lastMediaType = opts.optString("mediaType", "image");
+                limit = opts.optInt("limit", 20);
+            }
+
+            final String finalMediaType = lastMediaType;
+            final int finalLimit = limit;
+
+            cordova.getThreadPool().execute(() -> {
+                try {
+                    JSONArray res = getLastMedias(finalMediaType, finalLimit);
+                    callbackContext.success(res);
+                } catch (Exception e) {
+                    callbackContext.error(e.getMessage());
+                }
+            });
             return true;
         }
 
@@ -151,6 +187,7 @@ public class MediaPicker extends CordovaPlugin {
             });
             return true;
         }
+
         return false;
     }
 
@@ -208,7 +245,7 @@ public class MediaPicker extends CordovaPlugin {
         });
     }
 
-    // ✅ Safe helper to check Photo Picker availability
+    // Safe helper to check Photo Picker availability
     private boolean isPhotoPickerAvailable() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
             return false; // Android 10 and below → no Photo Picker
@@ -222,6 +259,212 @@ public class MediaPicker extends CordovaPlugin {
         } catch (Exception e) {
             return false; // Defensive fallback
         }
+    }
+
+   // Récupère les derniers médias (images/vidéos), les met en cache si besoin et retourne un JSONArray avec leurs infos (id, uri, type, chemin cache, durée et miniature pour les vidéos)
+    private JSONArray getLastMedias(String mediaType, int limit) throws JSONException {
+        JSONArray result = new JSONArray();
+        ArrayList<JSONObjectWithTimestamp> tempList = new ArrayList<>();
+
+        // Internal function to retrieve media by type
+        BiConsumer<String, Integer> fetchByType = (type, lim) -> {
+            try {
+                Uri collection;
+                String[] projection;
+
+                if ("images".equals(type)) {
+                    collection = MediaStore.Images.Media.EXTERNAL_CONTENT_URI;
+                    projection = new String[]{
+                            MediaStore.Images.Media._ID,
+                            MediaStore.Images.Media.DATE_TAKEN,
+                            MediaStore.Images.Media.WIDTH,
+                            MediaStore.Images.Media.HEIGHT
+                    };
+                } else { // video
+                    collection = MediaStore.Video.Media.EXTERNAL_CONTENT_URI;
+                    projection = new String[]{
+                            MediaStore.Video.Media._ID,
+                            MediaStore.Video.Media.DATE_TAKEN,
+                            MediaStore.Video.Media.DURATION,
+                            MediaStore.Video.Media.WIDTH,
+                            MediaStore.Video.Media.HEIGHT
+                    };
+                }
+
+                Cursor cursor = cordova.getContext().getContentResolver().query(
+                        collection,
+                        projection,
+                        null,
+                        null,
+                        MediaStore.MediaColumns.DATE_ADDED + " DESC"
+                );
+
+                if (cursor == null) return;
+
+                int idCol = cursor.getColumnIndex(MediaStore.MediaColumns._ID);
+                int durCol = "videos".equals(type) ? cursor.getColumnIndex(MediaStore.Video.Media.DURATION) : -1;
+                int widthCol = cursor.getColumnIndex(type.equals("images") ?
+                        MediaStore.Images.Media.WIDTH : MediaStore.Video.Media.WIDTH);
+                int heightCol = cursor.getColumnIndex(type.equals("images") ?
+                        MediaStore.Images.Media.HEIGHT : MediaStore.Video.Media.HEIGHT);
+                int dateTakenCol = cursor.getColumnIndex(type.equals("images") ?
+                        MediaStore.Images.Media.DATE_TAKEN : MediaStore.Video.Media.DATE_TAKEN);
+                int dateAddedCol = cursor.getColumnIndex(MediaStore.MediaColumns.DATE_ADDED);
+
+                int count = 0;
+                while (cursor.moveToNext() && count < lim) {
+                    long id = cursor.getLong(idCol);
+                    Uri mediaUri = Uri.withAppendedPath(collection, String.valueOf(id));
+
+                    JSONObject obj = new JSONObject();
+                    obj.put("index", id);
+                    obj.put("type", "images".equals(type) ? "image" : "video");
+
+                    // Copy to cache
+                    try {
+                        String ext = "images".equals(type) ? "jpg" : "mp4";
+                        File cacheFile = new File(cordova.getContext().getCacheDir(),
+                                "media_" + id + "." + ext);
+
+                        if (!cacheFile.exists()) {
+                            InputStream in = cordova.getContext().getContentResolver().openInputStream(mediaUri);
+                            FileOutputStream out = new FileOutputStream(cacheFile);
+                            byte[] buffer = new byte[8192];
+                            int len;
+                            while (in != null && (len = in.read(buffer)) > 0) {
+                                out.write(buffer, 0, len);
+                            }
+                            if (in != null) in.close();
+                            out.close();
+                        }
+
+                        obj.put("uri", "file://" + cacheFile.getAbsolutePath());
+                    } catch (Exception e) {
+                        obj.put("uri", mediaUri.toString());
+                    }
+
+                    obj.put("width", widthCol != -1 ? cursor.getInt(widthCol) : 0);
+                    obj.put("height", heightCol != -1 ? cursor.getInt(heightCol) : 0);
+
+                    long ts = 0L;
+                    if (dateTakenCol != -1) ts = cursor.getLong(dateTakenCol);
+                    if (ts == 0 && dateAddedCol != -1) ts = cursor.getLong(dateAddedCol) * 1000L;
+
+                    if (ts == 0) {
+                        String realPath = getRealPathFromUri(mediaUri);
+                        if (realPath != null) {
+                            File f = new File(realPath);
+                            if (f.exists()) ts = f.lastModified();
+                        }
+                    }
+
+                    String creationDateStr = "01/01/1970";
+                    if (ts != 0) {
+                        Date date = new Date(ts);
+                        SimpleDateFormat sdf = new SimpleDateFormat("dd/MM/yyyy", Locale.getDefault());
+                        creationDateStr = sdf.format(date);
+                    }
+                    obj.put("creationDate", creationDateStr);
+
+                    if ("videos".equals(type)) {
+                        obj.put("duration", durCol != -1 ? cursor.getLong(durCol) / 1000.0 : 0.0);
+                        obj.put("thumbnail", generateVideoThumb(mediaUri));
+                    }
+
+                    tempList.add(new JSONObjectWithTimestamp(obj, ts));
+
+                    count++;
+                }
+                cursor.close();
+            } catch (Exception ignored) {}
+        };
+
+        if ("all".equals(mediaType)) {
+            fetchByType.accept("images", limit);
+            fetchByType.accept("videos", limit);
+        } else {
+            fetchByType.accept(mediaType, limit);
+        }
+
+        tempList.sort((a, b) -> Long.compare(b.timestamp, a.timestamp));
+
+        for (int i = 0; i < Math.min(limit, tempList.size()); i++) {
+            result.put(tempList.get(i).json);
+        }
+
+        return result;
+    }
+
+    // Internal wrapper to store timestamp without exposing it
+    private static class JSONObjectWithTimestamp {
+        JSONObject json;
+        long timestamp;
+
+        JSONObjectWithTimestamp(JSONObject json, long timestamp) {
+            this.json = json;
+            this.timestamp = timestamp;
+        }
+    }
+
+    // Generates a video thumbnail, stores it in cache, and returns the file path.
+    private String generateVideoThumb(Uri videoUri) {
+        try {
+            File thumbFile = new File(
+                cordova.getContext().getCacheDir(),
+                "thumb_" + videoUri.hashCode() + ".jpg"
+            );
+
+            if (thumbFile.exists()) {
+                return "file://" + thumbFile.getAbsolutePath();
+            }
+
+            Bitmap thumb = null;
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                // Android 10+ : Use loadThumbnail (MICRO_KIND ≈ 96x96)
+                thumb = cordova.getContext().getContentResolver().loadThumbnail(
+                    videoUri,
+                    new Size(96, 96),
+                    null
+                );
+            } else {
+                // Android < 10 : ThumbnailUtils, requires a real file path
+                String path = getRealPathFromUri(videoUri);
+                if (path != null) {
+                    thumb = ThumbnailUtils.createVideoThumbnail(
+                        path,
+                        MediaStore.Images.Thumbnails.MICRO_KIND
+                    );
+                }
+            }
+
+            if (thumb == null) return null;
+
+            FileOutputStream fos = new FileOutputStream(thumbFile);
+            thumb.compress(Bitmap.CompressFormat.JPEG, 80, fos);
+            fos.close();
+
+            return "file://" + thumbFile.getAbsolutePath();
+
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    // For Android < Q, retrieves the actual file path of the video
+    private String getRealPathFromUri(Uri contentUri) {
+        String[] proj = { MediaStore.Video.Media.DATA };
+        Cursor cursor = cordova.getContext().getContentResolver().query(contentUri, proj, null, null, null);
+        if (cursor != null) {
+            int colIndex = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DATA);
+            if (cursor.moveToFirst()) {
+                String path = cursor.getString(colIndex);
+                cursor.close();
+                return path;
+            }
+            cursor.close();
+        }
+        return null;
     }
 
     private JSONObject copyUriToCache(Uri uri, int index, ArrayList<String> errors) {
