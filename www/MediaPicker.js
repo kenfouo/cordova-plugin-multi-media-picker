@@ -8,13 +8,32 @@ function MediaPicker() { }
  */
 MediaPicker.prototype.getMedias = function (opts = {}, successCallback, errorCallback) {
 
-    if (typeof successCallback == 'function' && typeof successCallback == 'function') {
+    if (typeof successCallback == 'function' && typeof errorCallback == 'function') {
 
         return cordova.exec(successCallback, errorCallback, 'MediaPicker', 'getMedias', [opts]);
     }
     else {
         return new Promise(function (resolve, reject) {
             cordova.exec(resolve, reject, 'MediaPicker', 'getMedias', [opts]);
+        });
+    }
+};
+
+/**
+ * Get medias with options
+ * @param {Object} opts
+ * @param {number} opts.selectionLimit - max number of medias
+ * @param {boolean} opts.showLoader - show overlay loader
+ */
+MediaPicker.prototype.getLastMedias = function (opts = {}, successCallback, errorCallback) {
+
+    if (typeof successCallback == 'function' && typeof errorCallback == 'function') {
+
+        return cordova.exec(successCallback, errorCallback, 'MediaPicker', 'getLastMedias', [opts]);
+    }
+    else {
+        return new Promise(function (resolve, reject) {
+            cordova.exec(resolve, reject, 'MediaPicker', 'getLastMedias', [opts]);
         });
     }
 };
