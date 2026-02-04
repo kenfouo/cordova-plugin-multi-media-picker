@@ -425,42 +425,4 @@ class MediaPicker: CDVPlugin, PHPickerViewControllerDelegate {
         let result = CDVPluginResult(status: .ok, messageAs: assetsList)
         self.commandDelegate.send(result, callbackId: command.callbackId)
     }
-
-
-    async function loadLastMedia(type, count) {
-    const medias = await MediaPicker.getLastMedias(type, count);
-    console.log('medias1 : '+JSON.stringify(medias, null, 2));
-
-
-/* 
-    private func fetchPhotosFromLibrary(command: CDVInvokedUrlCommand) {
-        var assetsList: [[String: Any]] = []
-        
-        // Options de tri : on prend les images, triées par date de création (plus récent en premier)
-        let fetchOptions = PHFetchOptions()
-        fetchOptions.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
-        
-        let allPhotos = PHAsset.fetchAssets(with: .image, options: fetchOptions)
-        
-        let manager = PHImageManager.default()
-        let requestOptions = PHImageRequestOptions()
-        requestOptions.isSynchronous = true // On le garde synchrone pour la boucle simple, mais attention si la galerie est énorme
-        requestOptions.deliveryMode = .fastFormat
-
-        allPhotos.enumerateObjects { (asset, index, stop) in
-            var photoInfo: [String: Any] = [
-                "localIdentifier": asset.localIdentifier,
-                "width": asset.pixelWidth,
-                "height": asset.pixelHeight,
-                "creationDate": asset.creationDate?.description ?? ""
-            ]
-            
-            // Note : Pour obtenir l'URL du fichier réel ou l'image en base64, 
-            // il faudra faire un appel supplémentaire à requestImageDataAndOrientation
-            assetsList.append(photoInfo)
-        }
-
-        let result = CDVPluginResult(status: .ok, messageAs: assetsList)
-        self.commandDelegate.send(result, callbackId: command.callbackId)
-    } */
 }
