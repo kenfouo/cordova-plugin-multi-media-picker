@@ -1,629 +1,428 @@
-package com.okanbeydanol.mediaPicker;
+import Foundation
+import PhotosUI
+import UniformTypeIdentifiers
+import UIKit
+import AVFoundation
 
-import android.app.Activity;
-import android.content.Intent;
-import android.database.Cursor;
-import android.net.Uri;
-import android.os.Build;
-import android.os.ext.SdkExtensions;
-import android.provider.MediaStore;
-import android.provider.OpenableColumns;
-import android.widget.FrameLayout;
-import android.widget.ProgressBar;
-import android.graphics.BitmapFactory;
-import android.media.MediaMetadataRetriever;
+@objc(MediaPicker)
+class MediaPicker: CDVPlugin, PHPickerViewControllerDelegate {
 
-import org.apache.cordova.*;
-import org.json.JSONArray;
-import org.json.JSONException;
-import org.json.JSONObject;
+    private var commandCallbackId: String?
 
-import java.io.File;
-import java.io.FileOutputStream;
-import java.io.InputStream;
-import java.util.ArrayList;
-import java.util.UUID;
+    private var selectionLimitOpt: Int = 3
+    private var showLoaderOpt: Bool = true
+    private var imageOnlyOpt: Bool = false
+    private var mediaTypeOpt : String = "all" // ✅ Ajouté
 
-import android.graphics.Bitmap;
-import android.media.ThumbnailUtils;
-import android.util.Size;
+    private weak var overlayView: UIView?
+    private weak var overlaySpinner: UIActivityIndicatorView?
 
-import java.text.SimpleDateFormat;
-import java.util.Date;
-import java.util.Locale;
-import java.util.function.BiConsumer;
+    @objc(getMedias:)
+    func getMedias(command: CDVInvokedUrlCommand) {
+        self.commandCallbackId = command.callbackId
 
-import android.content.ContentResolver;
-import android.content.ContentUris;
-import android.media.ExifInterface;
-
-public class MediaPicker extends CordovaPlugin {
-
-    private static final int REQUEST_CODE = 2025;
-
-    private CallbackContext callbackContext;
-    private int selectionLimit = 3;
-    private boolean showLoader = true;
-    private boolean imageOnly = false;
-    private String mediaType = "all"; // images | videos | all
-
-    private FrameLayout overlayView;
-    private ProgressBar overlaySpinner;
-    private boolean isPickerOpen = false;
-
-    @Override
-    public boolean execute(String action, JSONArray args, final CallbackContext callbackContext) throws JSONException {
-        if ("getMedias".equals(action)) {
-            if (isPickerOpen) {
-                callbackContext.error("Picker is already open");
-                return true;
+        if let opts = command.argument(at: 0) as? [String: Any] {
+            if let limit = opts["selectionLimit"] as? Int { selectionLimitOpt = max(1, limit) }
+            if let show = opts["showLoader"] as? Bool { showLoaderOpt = show }
+            if let imageOnly = opts["imageOnly"] as? Bool { imageOnlyOpt = imageOnly }
+            if let mediaType = opts["mediaType"] as? String { mediaTypeOpt = mediaType }
+            else {
+                // compatibility fallback for older versions
+                mediaTypeOpt = imageOnlyOpt ? "images" : "all";
             }
-            this.callbackContext = callbackContext;
-
-            if (args != null && args.length() > 0) {
-                JSONObject opts = args.optJSONObject(0);
-                if (opts != null) {
-                    selectionLimit = Math.max(1, opts.optInt("selectionLimit", 3));
-                    showLoader = opts.optBoolean("showLoader", true);
-                    imageOnly = opts.optBoolean("imageOnly", false);
-                    mediaType = opts.optString("mediaType", null);
-                    // compatibility fallback for older versions
-                    if (mediaType == null || mediaType.isEmpty()) {
-                        mediaType = imageOnly ? "images" : "all";
-                    }     
-                }
-            }
-
-            Intent intent;
-
-            if (isPhotoPickerAvailable() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && SdkExtensions.getExtensionVersion(Build.VERSION_CODES.R) >= 2) {
-                // ✅ Android 11+ with Photo Picker (native or backported via Play Services)
-                intent = new Intent(MediaStore.ACTION_PICK_IMAGES);
-
-                if (selectionLimit > 1) {
-                    intent.putExtra(MediaStore.EXTRA_PICK_IMAGES_MAX, selectionLimit);
-                }
-
-                switch (mediaType) {
-                    case "images":
-                        intent.setType("image/*");
-                        break;
-
-                    case "videos":
-                        intent.setType("video/*");
-                        break;
-
-                    case "all":
-                    default:
-                        intent.setType("*/*");
-                        intent.putExtra(Intent.EXTRA_MIME_TYPES,
-                            new String[]{"image/*", "video/*"});
-                        break;
-                }
-
-
-            } else {
-                //  Fallback for Android 10 and below
-                intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-                intent.addCategory(Intent.CATEGORY_OPENABLE);
-
-               switch (mediaType) {
-                    case "images":
-                        intent.setType("image/*");
-                        break;
-
-                    case "videos":
-                        intent.setType("video/*");
-                        break;
-
-                    case "all":
-                    default:
-                        intent.setType("*/*");
-                        intent.putExtra(Intent.EXTRA_MIME_TYPES,
-                            new String[]{"image/*", "video/*"});
-                        break;
-                }
-
-                intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, selectionLimit > 1);
-            }
-
-            isPickerOpen = true;
-            cordova.startActivityForResult(this, intent, REQUEST_CODE);
-            return true;
         }
 
-        if ("getLastMedias".equals(action)) {
-            JSONObject opts = args.optJSONObject(0);
-            String lastMediaType = "image";
-            int limit = 20;
-
-            if (opts != null) {
-                lastMediaType = opts.optString("mediaType", "image");
-                limit = opts.optInt("limit", 20);
-            }
-
-            final String finalMediaType = lastMediaType;
-            final int finalLimit = limit;
-
-            cordova.getThreadPool().execute(() -> {
-                try {
-                    JSONArray res = getLastMedias(finalMediaType, finalLimit);
-                    callbackContext.success(res);
-                } catch (Exception e) {
-                    callbackContext.error(e.getMessage());
-                }
-            });
-            return true;
+        guard let presentingVC = self.viewController else {
+            let result = CDVPluginResult(status: .error, messageAs: "No presenting view controller")
+            self.commandDelegate.send(result, callbackId: command.callbackId)
+            return
         }
 
-        if ("getExifForKey".equals(action)) {
-            String fileUri = args.optString(0);
-            String key = args.optString(1, null); // null si non fourni
-            
-            if (fileUri == null || fileUri.isEmpty()) {
-                callbackContext.error("File URI is required");
-                return true;
-            }
-
-            if ("null".equals(key) || key == null || key.isEmpty()) {
-                callbackContext.error("Exif key is required");
-                return true;
-            }
-
-            cordova.getThreadPool().execute(() -> {
-                try {
-                    // Nettoyage de l'URI (enlever file:// si présent)
-                    String path = fileUri.replace("file://", "");
-
-                    // Traitement Image via ExifInterface
-                    ExifInterface exif = new ExifInterface(path);
-
-                    String exifKeyValue = exif.getAttribute(key);
-
-                    callbackContext.success(exifKeyValue);
-                } catch (Exception e) {
-                    callbackContext.error("Exif error: " + e.getMessage());
-                }
-            });
-            return true;
+        //  Prevent multiple picker presentations
+        if presentingVC.presentedViewController is PHPickerViewController {
+            let result = CDVPluginResult(status: .error, messageAs: "Picker is already presented")
+            self.commandDelegate.send(result, callbackId: command.callbackId)
+            return
         }
 
-        return false;
-    }
+        if #available(iOS 14, *) {
+            var config = PHPickerConfiguration()
+            switch mediaTypeOpt {
+            case "images": config.filter = .images
+            break;
 
-    @Override
-    public void onActivityResult(int requestCode, int resultCode, Intent data) {
-        if (requestCode != REQUEST_CODE)
-            return;
+            case "videos" : config.filter = .videos
+            break;
 
-        isPickerOpen = false;
+            default:  config.filter = .any(of: [.images, .videos])
+                
+            } 
 
-        if (resultCode != Activity.RESULT_OK || data == null) {
-            callbackContext.success(new JSONArray()); // empty array
-            return;
-        }
+            config.selectionLimit = selectionLimitOpt
 
-        if (showLoader)
-            showLoaderOverlay();
-
-        cordova.getThreadPool().execute(() -> {
-            ArrayList<JSONObject> results = new ArrayList<>();
-            ArrayList<String> errors = new ArrayList<>();
-
-            try {
-                if (data.getClipData() != null) {
-                    int count = Math.min(data.getClipData().getItemCount(), selectionLimit);
-                    for (int i = 0; i < count; i++) {
-                        Uri uri = data.getClipData().getItemAt(i).getUri();
-                        JSONObject obj = copyUriToCache(uri, i, errors);
-                        if (obj != null)
-                            results.add(obj);
-                    }
-                } else if (data.getData() != null) {
-                    Uri uri = data.getData();
-                    JSONObject obj = copyUriToCache(uri, 0, errors);
-                    if (obj != null)
-                        results.add(obj);
-                }
-            } catch (Exception e) {
-                errors.add("Unexpected error: " + e.getMessage());
-            }
-
-            JSONArray array = new JSONArray();
-            for (JSONObject o : results)
-                array.put(o);
-
-            cordova.getActivity().runOnUiThread(() -> {
-                if (showLoader)
-                    hideLoaderOverlay();
-                if (!errors.isEmpty()) {
-                    callbackContext.error(String.join("\n", errors));
-                } else {
-                    callbackContext.success(array);
-                }
-            });
-        });
-    }
-
-    // Safe helper to check Photo Picker availability
-    private boolean isPhotoPickerAvailable() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
-            return false; // Android 10 and below → no Photo Picker
-        }
-
-        try {
-            int extension = SdkExtensions.getExtensionVersion(Build.VERSION_CODES.R);
-            return extension >= 2; // API available via Play Services
-        } catch (NoClassDefFoundError e) {
-            return false; // SdkExtensions missing on some OEM ROMs
-        } catch (Exception e) {
-            return false; // Defensive fallback
-        }
-    }
-
-   // Récupère les derniers médias (images/vidéos), les met en cache si besoin et retourne un JSONArray avec leurs infos (id, uri, type, chemin cache, durée et miniature pour les vidéos)
-    private JSONArray getLastMedias(String mediaType, int limit) throws JSONException {
-        JSONArray result = new JSONArray();
-        ArrayList<JSONObjectWithTimestamp> tempList = new ArrayList<>();
-
-        // Internal function to retrieve media by type
-        BiConsumer<String, Integer> fetchByType = (type, lim) -> {
-            try {
-                Uri collection;
-                String[] projection;
-
-                if ("images".equals(type)) {
-                    collection = MediaStore.Images.Media.EXTERNAL_CONTENT_URI;
-                    projection = new String[]{
-                            MediaStore.Images.Media._ID,
-                            MediaStore.Images.Media.DATE_TAKEN,
-                            MediaStore.Images.Media.WIDTH,
-                            MediaStore.Images.Media.HEIGHT
-                    };
-                } else { // video
-                    collection = MediaStore.Video.Media.EXTERNAL_CONTENT_URI;
-                    projection = new String[]{
-                            MediaStore.Video.Media._ID,
-                            MediaStore.Video.Media.DATE_TAKEN,
-                            MediaStore.Video.Media.DURATION,
-                            MediaStore.Video.Media.WIDTH,
-                            MediaStore.Video.Media.HEIGHT
-                    };
-                }
-
-                Cursor cursor = cordova.getContext().getContentResolver().query(
-                        collection,
-                        projection,
-                        null,
-                        null,
-                        MediaStore.MediaColumns.DATE_ADDED + " DESC"
-                );
-
-                if (cursor == null) return;
-
-                int idCol = cursor.getColumnIndex(MediaStore.MediaColumns._ID);
-                int durCol = "videos".equals(type) ? cursor.getColumnIndex(MediaStore.Video.Media.DURATION) : -1;
-                int widthCol = cursor.getColumnIndex(type.equals("images") ?
-                        MediaStore.Images.Media.WIDTH : MediaStore.Video.Media.WIDTH);
-                int heightCol = cursor.getColumnIndex(type.equals("images") ?
-                        MediaStore.Images.Media.HEIGHT : MediaStore.Video.Media.HEIGHT);
-                int dateTakenCol = cursor.getColumnIndex(type.equals("images") ?
-                        MediaStore.Images.Media.DATE_TAKEN : MediaStore.Video.Media.DATE_TAKEN);
-                int dateAddedCol = cursor.getColumnIndex(MediaStore.MediaColumns.DATE_ADDED);
-
-                int count = 0;
-                while (cursor.moveToNext() && count < lim) {
-                    long id = cursor.getLong(idCol);
-                    Uri mediaUri = Uri.withAppendedPath(collection, String.valueOf(id));
-
-                    JSONObject obj = new JSONObject();
-                    obj.put("index", id);
-                    obj.put("type", "images".equals(type) ? "image" : "video");
-
-                    // Copy to cache
-                    try {
-                        String ext = "images".equals(type) ? "jpg" : "mp4";
-                        File cacheFile = new File(cordova.getContext().getCacheDir(),
-                                "media_" + id + "." + ext);
-
-                        if (!cacheFile.exists()) {
-                            InputStream in = cordova.getContext().getContentResolver().openInputStream(mediaUri);
-                            FileOutputStream out = new FileOutputStream(cacheFile);
-                            byte[] buffer = new byte[8192];
-                            int len;
-                            while (in != null && (len = in.read(buffer)) > 0) {
-                                out.write(buffer, 0, len);
-                            }
-                            if (in != null) in.close();
-                            out.close();
-                        }
-
-                        obj.put("uri", "file://" + cacheFile.getAbsolutePath());
-                    } catch (Exception e) {
-                        obj.put("uri", mediaUri.toString());
-                    }
-
-                    obj.put("width", widthCol != -1 ? cursor.getInt(widthCol) : 0);
-                    obj.put("height", heightCol != -1 ? cursor.getInt(heightCol) : 0);
-
-                    long ts = 0L;
-                    if (dateTakenCol != -1) ts = cursor.getLong(dateTakenCol);
-                    if (ts == 0 && dateAddedCol != -1) ts = cursor.getLong(dateAddedCol) * 1000L;
-
-                    if (ts == 0) {
-                        String realPath = getRealPathFromUri(mediaUri);
-                        if (realPath != null) {
-                            File f = new File(realPath);
-                            if (f.exists()) ts = f.lastModified();
-                        }
-                    }
-
-                    String creationDateStr = "01/01/1970";
-                    if (ts != 0) {
-                        Date date = new Date(ts);
-                        SimpleDateFormat sdf = new SimpleDateFormat("dd/MM/yyyy", Locale.getDefault());
-                        creationDateStr = sdf.format(date);
-                    }
-                    obj.put("creationDate", creationDateStr);
-
-                    if ("videos".equals(type)) {
-                        obj.put("duration", durCol != -1 ? cursor.getLong(durCol) / 1000.0 : 0.0);
-                        obj.put("thumbnail", generateVideoThumb(mediaUri));
-                    }
-
-                    tempList.add(new JSONObjectWithTimestamp(obj, ts));
-
-                    count++;
-                }
-                cursor.close();
-            } catch (Exception ignored) {}
-        };
-
-        if ("all".equals(mediaType)) {
-            fetchByType.accept("images", limit);
-            fetchByType.accept("videos", limit);
+            let picker = PHPickerViewController(configuration: config)
+            picker.delegate = self
+            presentingVC.present(picker, animated: true, completion: nil)
         } else {
-            fetchByType.accept(mediaType, limit);
-        }
-
-        tempList.sort((a, b) -> Long.compare(b.timestamp, a.timestamp));
-
-        for (int i = 0; i < Math.min(limit, tempList.size()); i++) {
-            result.put(tempList.get(i).json);
-        }
-
-        return result;
-    }
-
-    // Internal wrapper to store timestamp without exposing it
-    private static class JSONObjectWithTimestamp {
-        JSONObject json;
-        long timestamp;
-
-        JSONObjectWithTimestamp(JSONObject json, long timestamp) {
-            this.json = json;
-            this.timestamp = timestamp;
+            let result = CDVPluginResult(status: .error, messageAs: "iOS < 14 not supported")
+            self.commandDelegate.send(result, callbackId: command.callbackId)
         }
     }
 
-    // Generates a video thumbnail, stores it in cache, and returns the file path.
-    private String generateVideoThumb(Uri videoUri) {
-        try {
-            File thumbFile = new File(
-                cordova.getContext().getCacheDir(),
-                "thumb_" + videoUri.hashCode() + ".jpg"
-            );
+    private func showLoader(on view: UIView) {
+        guard showLoaderOpt else { return }
+        DispatchQueue.main.async {
+            let overlay = UIView(frame: view.bounds)
+            overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            overlay.backgroundColor = UIColor.black.withAlphaComponent(0.35)
 
-            if (thumbFile.exists()) {
-                return "file://" + thumbFile.getAbsolutePath();
+            let spinner = UIActivityIndicatorView(style: .large)
+            spinner.startAnimating()
+            spinner.translatesAutoresizingMaskIntoConstraints = false
+
+            overlay.addSubview(spinner)
+            view.addSubview(overlay)
+
+            NSLayoutConstraint.activate([
+                spinner.centerXAnchor.constraint(equalTo: overlay.centerXAnchor),
+                spinner.centerYAnchor.constraint(equalTo: overlay.centerYAnchor)
+            ])
+
+            self.overlayView = overlay
+            self.overlaySpinner = spinner
+        }
+    }
+
+    private func hideLoader() {
+        DispatchQueue.main.async {
+            self.overlaySpinner?.stopAnimating()
+            self.overlayView?.removeFromSuperview()
+        }
+    }
+    
+    @available(iOS 14.0, *)
+    private func resolveMime(provider: NSItemProvider, dest: URL) -> String {
+        var candidates: [String] = []
+
+        // iOS 16+: use modern ContentTypes first
+        if #available(iOS 16.0, *) {
+            candidates.append(contentsOf: provider.registeredContentTypes.compactMap { $0.preferredMIMEType })
+        }
+
+        // Always fallback to legacy identifiers
+        candidates.append(contentsOf: provider.registeredTypeIdentifiers.compactMap { UTType($0)?.preferredMIMEType })
+
+        // Add dest file UTI if available
+        if let uti = try? dest.resourceValues(forKeys: [.typeIdentifierKey]).typeIdentifier,
+           let ut = UTType(uti),
+           let mime = ut.preferredMIMEType {
+            candidates.append(mime)
+        }
+
+        // Preferences
+        if candidates.contains("image/jpeg") {
+            return "image/jpeg"
+        }
+        if candidates.contains("video/mp4") {
+            return "video/mp4"
+        }
+
+        return candidates.first ?? "application/octet-stream"
+    }
+
+    @available(iOS 14, *)
+    func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+        if results.isEmpty {
+            picker.dismiss(animated: true) {
+                let result = CDVPluginResult(status: .ok, messageAs: [])
+                self.commandDelegate.send(result, callbackId: self.commandCallbackId)
             }
+            return
+        }
 
-            Bitmap thumb = null;
+        self.showLoader(on: picker.view)
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                // Android 10+ : Use loadThumbnail (MICRO_KIND ≈ 96x96)
-                thumb = cordova.getContext().getContentResolver().loadThumbnail(
-                    videoUri,
-                    new Size(96, 96),
-                    null
-                );
+        let group = DispatchGroup()
+        let lock = NSLock()
+        var medias: [[String: Any]] = []
+        var errorMessages: [String] = []
+
+        func addError(_ message: String) {
+            lock.lock()
+            errorMessages.append(message)
+            lock.unlock()
+        }
+
+        func normalizeFileURL(_ url: URL) -> String {
+            if url.scheme?.lowercased() == "file" {
+                return url.absoluteString
             } else {
-                // Android < 10 : ThumbnailUtils, requires a real file path
-                String path = getRealPathFromUri(videoUri);
-                if (path != null) {
-                    thumb = ThumbnailUtils.createVideoThumbnail(
-                        path,
-                        MediaStore.Images.Thumbnails.MICRO_KIND
-                    );
+                return "file://\(url.path)"
+            }
+        }
+
+        for (tapIndex, res) in results.enumerated() {
+            let provider = res.itemProvider
+            let isVideo = provider.hasItemConformingToTypeIdentifier(UTType.movie.identifier)
+            let isImage = provider.hasItemConformingToTypeIdentifier(UTType.image.identifier)
+
+            let typeIdentifier: String
+            if isVideo {
+                typeIdentifier = UTType.movie.identifier
+            } else if isImage {
+                typeIdentifier = UTType.image.identifier
+            } else {
+                typeIdentifier = provider.registeredTypeIdentifiers.first ?? UTType.data.identifier
+            }
+
+            group.enter()
+            provider.loadFileRepresentation(forTypeIdentifier: typeIdentifier) { (sourceURL, error) in
+                defer { group.leave() }
+
+                if let error = error {
+                    addError("Item \(tapIndex) load error: \(error.localizedDescription)")
+                    return
+                }
+                guard let sourceURL = sourceURL else {
+                    addError("Item \(tapIndex) no sourceURL")
+                    return
+                }
+
+                let fm = FileManager.default
+                let ext = sourceURL.pathExtension.isEmpty
+                    ? (isVideo ? "mov" : "jpeg")
+                    : sourceURL.pathExtension
+
+                let dest = fm.temporaryDirectory.appendingPathComponent("\(UUID().uuidString)_\(tapIndex).\(ext)")
+
+                do {
+                    if fm.fileExists(atPath: dest.path) {
+                        try fm.removeItem(at: dest)
+                    }
+                    try fm.copyItem(at: sourceURL, to: dest)
+                    let normalized = normalizeFileURL(dest)
+                    var info: [String: Any] = [
+                        "index": tapIndex,
+                        "uri": normalized,
+                        "fileName": dest.lastPathComponent,
+                        "fileSize": (try? fm.attributesOfItem(atPath: dest.path)[.size] as? Int) ?? 0
+                    ]
+                    info["mimeType"] = self.resolveMime(provider: provider, dest: dest)
+                    if isImage {
+                        info["type"] = "image"
+                        if let img = UIImage(contentsOfFile: dest.path) {
+                            info["width"] = Int(img.size.width)
+                            info["height"] = Int(img.size.height)
+                        }
+                    } else if isVideo {
+                        info["type"] = "video"
+                        let asset = AVAsset(url: dest)
+                        let duration = CMTimeGetSeconds(asset.duration)
+                        info["duration"] = duration
+
+                        if let track = asset.tracks(withMediaType: .video).first {
+                            let size = track.naturalSize.applying(track.preferredTransform)
+                            info["width"] = Int(abs(size.width))
+                            info["height"] = Int(abs(size.height))
+                        }
+                    } else {
+                        info["type"] = "other"
+                    }
+                    lock.lock()
+                    medias.append(info)
+                    lock.unlock()
+                } catch {
+                    addError("Item \(tapIndex) copy error: \(error.localizedDescription)")
                 }
             }
-
-            if (thumb == null) return null;
-
-            FileOutputStream fos = new FileOutputStream(thumbFile);
-            thumb.compress(Bitmap.CompressFormat.JPEG, 80, fos);
-            fos.close();
-
-            return "file://" + thumbFile.getAbsolutePath();
-
-        } catch (Exception e) {
-            return null;
         }
-    }
 
-    // For Android < Q, retrieves the actual file path of the video
-    private String getRealPathFromUri(Uri contentUri) {
-        String[] proj = { MediaStore.Video.Media.DATA };
-        Cursor cursor = cordova.getContext().getContentResolver().query(contentUri, proj, null, null, null);
-        if (cursor != null) {
-            int colIndex = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DATA);
-            if (cursor.moveToFirst()) {
-                String path = cursor.getString(colIndex);
-                cursor.close();
-                return path;
-            }
-            cursor.close();
-        }
-        return null;
-    }
+        group.notify(queue: .main) {
+            self.hideLoader()
 
-    private JSONObject copyUriToCache(Uri uri, int index, ArrayList<String> errors) {
-        try {
-            String fileName = null;
-            long fileSize = 0;
-
-            Cursor cursor = cordova.getContext().getContentResolver()
-                .query(uri, null, null, null, null);
-            if (cursor != null) {
-                int nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
-                int sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE);
-                if (cursor.moveToFirst()) {
-                    if (nameIndex != -1) fileName = cursor.getString(nameIndex);
-                    if (sizeIndex != -1) fileSize = cursor.getLong(sizeIndex);
+            picker.dismiss(animated: true) {
+                if !errorMessages.isEmpty {
+                    let result = CDVPluginResult(status: .error, messageAs: errorMessages.joined(separator: "\n"))
+                    self.commandDelegate.send(result, callbackId: self.commandCallbackId)
+                    return
                 }
-                cursor.close();
+
+                let sorted = medias.sorted { ($0["index"] as? Int ?? 0) < ($1["index"] as? Int ?? 0) }
+
+                let result = CDVPluginResult(status: .ok, messageAs: sorted)
+                self.commandDelegate.send(result, callbackId: self.commandCallbackId)
             }
+        }
+    }
 
-            String ext = getExtension(uri);
-            if (ext == null || ext.isEmpty()) {
-                ext = "dat";
-            }
-
-            File dest = new File(cordova.getContext().getCacheDir(),
-                UUID.randomUUID().toString() + "_" + index + "." + ext);
-
-            try (InputStream in = cordova.getContext().getContentResolver().openInputStream(uri);
-                 FileOutputStream out = new FileOutputStream(dest)) {
-
-                byte[] buffer = new byte[8192];
-                int len;
-                while (in != null && (len = in.read(buffer)) > 0) {
-                    out.write(buffer, 0, len);
+    @objc(getExifForKey:)
+    func getExifForKey(command: CDVInvokedUrlCommand) {
+        guard let path = command.argument(at: 0) as? String else {
+            let result = CDVPluginResult(status: .error, messageAs: "Path is missing")
+            self.commandDelegate.send(result, callbackId: command.callbackId)
+            return
+        }
+        
+        // Si la clé est absente, vide ou NSNull, on renvoie un JSON vide directement
+        guard let key = command.argument(at: 1) as? String, !key.isEmpty else {
+            let result = CDVPluginResult(status: .ok, messageAs: "Exif key is required")
+            self.commandDelegate.send(result, callbackId: command.callbackId)
+            return
+        }
+        
+        self.commandDelegate.run {
+            let cleanPath = path.replacingOccurrences(of: "file://", with: "")
+            let fileURL = URL(fileURLWithPath: cleanPath)
+            let isVideo = ["mp4", "mov", "m4v", "3gp"].contains(fileURL.pathExtension.lowercased())
+            
+            var foundValue: Any? = nil
+            
+            if isVideo {
+                // Recherche ciblée dans les métadonnées vidéo
+                let asset = AVAsset(url: fileURL)
+                foundValue = asset.commonMetadata.first(where: { $0.commonKey?.rawValue == key })?.value
+            } else {
+                // Recherche ciblée dans les métadonnées image
+                if let imageSource = CGImageSourceCreateWithURL(fileURL as CFURL, nil),
+                let props = CGImageSourceCopyPropertiesAtIndex(imageSource, 0, nil) as? [String: Any] {
+                    
+                    if let val = props[key] {
+                        foundValue = val
+                    } else if let exif = props[kCGImagePropertyExifDictionary as String] as? [String: Any], let val = exif[key] {
+                        foundValue = val
+                    } else if let tiff = props[kCGImagePropertyTIFFDictionary as String] as? [String: Any], let val = tiff[key] {
+                        foundValue = val
+                    } else if let gps = props[kCGImagePropertyGPSDictionary as String] as? [String: Any], let val = gps[key] {
+                        foundValue = val
+                    }
                 }
             }
-
-            if (fileName == null) {
-                fileName = dest.getName();
+            
+            // Construction du résultat (Valeur seule ou {} si rien trouvé)
+            let pluginResult: CDVPluginResult
+            if let data = foundValue {
+                // On renvoie la valeur dans son type natif (String, Int, etc.)
+                pluginResult = CDVPluginResult(status: .ok, messageAs: "\(data)")
+            } else {
+                pluginResult = CDVPluginResult(status: .ok, messageAs: [:])
             }
-            if (fileSize == 0) {
-                fileSize = dest.length();
-            }
+            
+            self.commandDelegate.send(pluginResult, callbackId: command.callbackId)
+        }
+    }
 
-            String mime = resolveMime(uri, dest, ext);
-            String type = "other";
-            JSONObject obj = new JSONObject();
-            if (mime.startsWith("image/")) {
-                type = "image";
-                BitmapFactory.Options options = new BitmapFactory.Options();
-                options.inJustDecodeBounds = true;
-                BitmapFactory.decodeFile(dest.getAbsolutePath(), options);
-                obj.put("width", options.outWidth);
-                obj.put("height", options.outHeight);
-            } else if (mime.startsWith("video/")) {
-                type = "video";
-                try (MediaMetadataRetriever retriever = new MediaMetadataRetriever()) {
-                    retriever.setDataSource(dest.getAbsolutePath());
-                    String w = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH);
-                    String h = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT);
-                    String d = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
-                    if (w != null) obj.put("width", Integer.parseInt(w));
-                    if (h != null) obj.put("height", Integer.parseInt(h));
-                    if (d != null) obj.put("duration", Long.parseLong(d) / 1000.0);
+    @objc(getLastMedias:)
+    func getLastMedias(command: CDVInvokedUrlCommand) {
+        self.commandDelegate.run {
+            let opts = command.argument(at: 0) as? [String: Any] ?? [:]
+            let limit = opts["limit"] as? Int ?? 20
+            let offset = opts["offset"] as? Int ?? 0
+            let mediaType = opts["mediaType"] as? String ?? "all" // "images", "videos", "all"
+
+            let status = PHPhotoLibrary.authorizationStatus()
+            
+            if status == .authorized || status == .limited {
+                self.fetchMediasWithPagination(command: command, limit: limit, offset: offset, mediaType: mediaType)
+            } else {
+                PHPhotoLibrary.requestAuthorization { newStatus in
+                    if newStatus == .authorized || newStatus == .limited {
+                        self.fetchMediasWithPagination(command: command, limit: limit, offset: offset, mediaType: mediaType)
+                    } else {
+                        self.commandDelegate.send(CDVPluginResult(status: .error, messageAs: "Permission denied"), callbackId: command.callbackId)
+                    }
                 }
             }
-
-            obj.put("index", index);
-            obj.put("uri", "file://" + dest.getAbsolutePath());
-            obj.put("fileName", fileName);
-            obj.put("fileSize", fileSize);
-            obj.put("mimeType", mime);
-            obj.put("type", type);
-
-            return obj;
-
-        } catch (Exception e) {
-            errors.add("Item " + index + " copy error: " + e.getMessage());
-            return null;
         }
     }
 
-    private String resolveMime(Uri uri, File dest, String ext) {
-        String mime = cordova.getContext().getContentResolver().getType(uri);
-
-        // Try system type
-        if (mime != null) return mime;
-
-        // Try by extension
-        if (ext != null) {
-            String lower = ext.toLowerCase();
-            switch (lower) {
-                case "jpg":
-                case "jpeg":
-                    return "image/jpeg";
-                case "png":
-                    return "image/png";
-                case "gif":
-                    return "image/gif";
-                case "mp4":
-                    return "video/mp4";
-                case "mov":
-                    return "video/quicktime";
-            }
+    private func fetchMediasWithPagination(command: CDVInvokedUrlCommand, limit: Int, offset: Int, mediaType: String) {
+        var assetsList: [[String: Any]] = []
+        let fetchOptions = PHFetchOptions()
+        fetchOptions.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+        
+        // ✅ Filtrage selon le mediaType
+        let allAssets: PHFetchResult<PHAsset>
+        if mediaType == "images" {
+            allAssets = PHAsset.fetchAssets(with: .image, options: fetchOptions)
+        } else if mediaType == "videos" {
+            allAssets = PHAsset.fetchAssets(with: .video, options: fetchOptions)
+        } else {
+            allAssets = PHAsset.fetchAssets(with: fetchOptions)
         }
 
-        // Try via MediaMetadataRetriever for video
-        try (MediaMetadataRetriever retriever = new MediaMetadataRetriever()) {
-            retriever.setDataSource(dest.getAbsolutePath());
-            String mimeFromMeta = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_MIMETYPE);
-            if (mimeFromMeta != null) return mimeFromMeta;
-        } catch (Exception ignored) {}
-
-        // Fallback
-        return "application/octet-stream";
-    }
-
-    private String getExtension(Uri uri) {
-        String ext = null;
-        Cursor cursor = cordova.getContext().getContentResolver()
-            .query(uri, null, null, null, null);
-        if (cursor != null) {
-            int nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
-            if (nameIndex != -1 && cursor.moveToFirst()) {
-                String name = cursor.getString(nameIndex);
-                int dot = name.lastIndexOf('.');
-                if (dot > 0)
-                    ext = name.substring(dot + 1);
-            }
-            cursor.close();
+        let totalCount = allAssets.count
+        let endIndex = min(offset + limit, totalCount)
+        
+        if offset >= totalCount {
+            self.commandDelegate.send(CDVPluginResult(status: .ok, messageAs: []), callbackId: command.callbackId)
+            return
         }
-        return ext;
-    }
 
-    private void showLoaderOverlay() {
-        Activity activity = cordova.getActivity();
-        activity.runOnUiThread(() -> {
-            overlayView = new FrameLayout(activity);
-            overlayView.setBackgroundColor(0x80000000);
-            overlaySpinner = new ProgressBar(activity, null, android.R.attr.progressBarStyleLarge);
-            FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT);
-            lp.gravity = android.view.Gravity.CENTER;
-            overlayView.addView(overlaySpinner, lp);
-            activity.addContentView(overlayView,
-                new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT,
-                    FrameLayout.LayoutParams.MATCH_PARENT));
-        });
-    }
+        let manager = PHImageManager.default()
+        let fm = FileManager.default
+        let tempDir = fm.temporaryDirectory
+        let semaphore = DispatchSemaphore(value: 0)
 
-    private void hideLoaderOverlay() {
-        Activity activity = cordova.getActivity();
-        activity.runOnUiThread(() -> {
-            if (overlayView != null) {
-                ((FrameLayout) overlayView.getParent()).removeView(overlayView);
-                overlayView = null;
-                overlaySpinner = null;
+        for i in offset..<endIndex {
+            let asset = allAssets.object(at: i)
+            var mediaInfo: [String: Any] = [
+                "index": asset.localIdentifier,
+                "width": asset.pixelWidth,
+                "height": asset.pixelHeight,
+                "creationDate": asset.creationDate?.description ?? "",
+                "type": asset.mediaType == .video ? "video" : "image"
+            ]
+
+            if asset.mediaType == .video {
+                mediaInfo["duration"] = asset.duration
+                let videoOptions = PHVideoRequestOptions()
+                videoOptions.isNetworkAccessAllowed = true
+                
+                // --- Génération de la miniature ---
+                let thumbOptions = PHImageRequestOptions()
+                thumbOptions.isSynchronous = true // On peut rester synchrone ici car c'est rapide pour une miniature
+                thumbOptions.deliveryMode = .highQualityFormat
+                
+                // On demande une taille raisonnable pour la grille (ex: 300x300)
+                manager.requestImage(for: asset, targetSize: CGSize(width: 300, height: 300), contentMode: .aspectFill, options: thumbOptions) { (image, info) in
+                    if let image = image, let data = image.jpegData(compressionQuality: 0.8) {
+                        let thumbName = "thumb_\(UUID().uuidString).jpg"
+                        let thumbURL = tempDir.appendingPathComponent(thumbName)
+                        try? data.write(to: thumbURL)
+                        mediaInfo["thumbnail"] = "file://\(thumbURL.path)"
+                    }
+                }
+                
+                manager.requestAVAsset(forVideo: asset, options: videoOptions) { (avAsset, audioMix, info) in
+                    if let urlAsset = avAsset as? AVURLAsset {
+                        let ext = urlAsset.url.pathExtension
+                        let destURL = tempDir.appendingPathComponent("\(UUID().uuidString).\(ext)")
+                        try? fm.copyItem(at: urlAsset.url, to: destURL)
+                        mediaInfo["uri"] = "file://\(destURL.path)"
+                    }
+                    semaphore.signal()
+                }
+            } else {
+                let imgOptions = PHImageRequestOptions()
+                imgOptions.isSynchronous = false
+                imgOptions.isNetworkAccessAllowed = true
+                
+                manager.requestImageDataAndOrientation(for: asset, options: imgOptions) { (data, uti, orientation, info) in
+                    if let data = data {
+                        let ext = UTType(uti ?? "")?.preferredFilenameExtension ?? "jpg"
+                        let destURL = tempDir.appendingPathComponent("\(UUID().uuidString).\(ext)")
+                        try? data.write(to: destURL)
+                        mediaInfo["uri"] = "file://\(destURL.path)"
+                    }
+                    semaphore.signal()
+                }
             }
-        });
+            
+            semaphore.wait()
+            assetsList.append(mediaInfo)
+        }
+
+        let result = CDVPluginResult(status: .ok, messageAs: assetsList)
+        self.commandDelegate.send(result, callbackId: command.callbackId)
     }
 }
