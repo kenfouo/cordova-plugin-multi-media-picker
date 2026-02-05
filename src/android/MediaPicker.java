@@ -144,6 +144,8 @@ public class MediaPicker extends CordovaPlugin {
             this.callbackContext = callbackContext;
             this.lastArgs = args; // On stocke les arguments ici
 
+            processGetLastMedias(this.lastArgs);
+            /* 
             String[] permissions;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 permissions = new String[]{ 
@@ -158,7 +160,7 @@ public class MediaPicker extends CordovaPlugin {
                 processGetLastMedias(this.lastArgs);
             } else {
                 cordova.requestPermissions(this, PERMISSION_REQUEST_CODE, permissions);
-            }
+            } */
             return true;
         }
 
@@ -681,7 +683,7 @@ public class MediaPicker extends CordovaPlugin {
         });
     }
 
-    @Override
+/*     @Override
     public void onRequestPermissionResult(int requestCode, String[] permissions, int[] grantResults) throws JSONException {
         if (requestCode == PERMISSION_REQUEST_CODE) {
             boolean allGranted = true;
@@ -702,7 +704,7 @@ public class MediaPicker extends CordovaPlugin {
             // On nettoie la variable après usage
             this.lastArgs = null;
         }
-    }
+    } */
 
     private boolean hasPermissions(String[] permissions) {
         for (String p : permissions) {
