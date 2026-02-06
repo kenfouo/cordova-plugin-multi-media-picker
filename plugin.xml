@@ -16,7 +16,7 @@
      <engine name="cordova" version=">=3.0.0"/>
   </engines>
   <js-module name="MediaPicker" src="www/MediaPicker.js">
-    <clobbers target="cordova.plugins.MediaPicker" />
+    <clobbers target="window.MediaPicker" />
   </js-module>
   <platform name="ios">
     <framework src="MediaPlayer.framework" />
