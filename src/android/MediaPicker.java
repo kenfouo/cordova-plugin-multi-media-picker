@@ -657,30 +657,60 @@ public class MediaPicker extends CordovaPlugin {
             }
         });
     }
-
+    
     private void processGetLastMedias(JSONArray args) {
-        JSONObject opts = args.optJSONObject(0);
-        String lastMediaType = "image";
+        // Initialisation par défaut (Utilise tes réglages 2026 : limit 20, type image)
         int limit = 20;
-
-        if (opts != null) {
-            lastMediaType = opts.optString("mediaType", "image");
-            limit = opts.optInt("limit", 20);
+        String lastMediaType = "images"; 
+    
+        if (args != null && args.length() > 0) {
+            JSONObject opts = args.optJSONObject(0);
+            if (opts != null) {
+                lastMediaType = opts.optString("mediaType", "images");
+                limit = opts.optInt("limit", 20);
+            }
         }
-
+    
         final String finalMediaType = lastMediaType;
         final int finalLimit = limit;
-
+    
         cordova.getThreadPool().execute(() -> {
             try {
                 JSONArray res = getLastMedias(finalMediaType, finalLimit);
                 callbackContext.success(res);
             } catch (Exception e) {
-                callbackContext.error(e.getMessage());
+                e.printStackTrace();
+                callbackContext.error("Internal error: " + e.getMessage());
             }
         });
     }
+    
+    @Override
+    public void onRequestPermissionResult(int requestCode, String[] permissions, int[] grantResults) {
+        if (requestCode == PERMISSION_REQUEST_CODE) {
+            boolean allGranted = true;
+            for (int r : grantResults) {
+                if (r == android.content.pm.PackageManager.PERMISSION_DENIED) {
+                    allGranted = false;
+                    break;
+                }
+            }
+    
+            if (allGranted) {
+                try {
+                    // Si lastArgs est nul, on passe un tableau vide pour éviter le crash
+                    processGetLastMedias(this.lastArgs != null ? this.lastArgs : new JSONArray());
+                } catch (Exception e) {
+                    this.callbackContext.error("Error processing media after permission: " + e.getMessage());
+                }
+            } else {
+                this.callbackContext.error("Permission denied by user");
+            }
+            this.lastArgs = null;
+        }
+    }
 
+    /*     
     @Override
     public void onRequestPermissionResult(int requestCode, String[] permissions, int[] grantResults) throws JSONException {
         if (requestCode == PERMISSION_REQUEST_CODE) {
@@ -702,7 +732,7 @@ public class MediaPicker extends CordovaPlugin {
             // On nettoie la variable après usage
             this.lastArgs = null;
         }
-    }
+    } */
 
     private boolean hasPermissions(String[] permissions) {
         for (String p : permissions) {
