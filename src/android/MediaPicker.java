@@ -692,7 +692,7 @@ public class MediaPicker extends CordovaPlugin {
                 }
             }
 
-            if (allGranted && this.lastArgs != null) {
+            if (allGranted) {
                 // On utilise les arguments stockés précédemment
                 processGetLastMedias(this.lastArgs);
             } else {
