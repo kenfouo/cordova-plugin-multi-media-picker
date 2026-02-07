@@ -50,11 +50,7 @@ public class MediaPicker extends CordovaPlugin {
     private FrameLayout overlayView;
     private ProgressBar overlaySpinner;
     private boolean isPickerOpen = false;
-
-    private String pendingAction = null;
-    private JSONArray pendingArgs = null;
-    private CallbackContext pendingCallback = null;
-
+    
     private static final int PERMISSION_REQUEST_CODE = 2026;
     private static final String READ_EXTERNAL_STORAGE = android.Manifest.permission.READ_EXTERNAL_STORAGE;
     // Pour Android 13+ (API 33)
@@ -145,38 +141,25 @@ public class MediaPicker extends CordovaPlugin {
         }
 
         if ("getLastMedias".equals(action)) {
-
-            this.pendingAction = action;
-            this.pendingArgs = args;
-            this.pendingCallback = callbackContext;
             this.callbackContext = callbackContext;
+            this.lastArgs = args; // Crucial pour la reprise après permission
         
             String[] permissions;
-        
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                permissions = new String[]{
-                    android.Manifest.permission.READ_MEDIA_IMAGES,
-                    android.Manifest.permission.READ_MEDIA_VIDEO
+                permissions = new String[]{ 
+                    android.Manifest.permission.READ_MEDIA_IMAGES, 
+                    android.Manifest.permission.READ_MEDIA_VIDEO 
                 };
             } else {
-                permissions = new String[]{
-                    android.Manifest.permission.READ_EXTERNAL_STORAGE
-                };
+                permissions = new String[]{ android.Manifest.permission.READ_EXTERNAL_STORAGE };
             }
         
             if (hasPermissions(permissions)) {
-        
                 processGetLastMedias(args);
-        
             } else {
-        
-                cordova.requestPermissions(
-                    this,
-                    PERMISSION_REQUEST_CODE,
-                    permissions
-                );
+                // Demande de permission : Cordova mettra en pause l'exécution
+                cordova.requestPermissions(this, PERMISSION_REQUEST_CODE, permissions);
             }
-        
             return true;
         }
 
@@ -704,56 +687,34 @@ public class MediaPicker extends CordovaPlugin {
     }
 
     @Override
-    public void onRequestPermissionResult(
-            int requestCode,
-            String[] permissions,
-            int[] grantResults) {
-    
-        if (requestCode != PERMISSION_REQUEST_CODE) return;
-    
-        boolean granted = true;
-    
-        if (grantResults.length == 0) granted = false;
-    
-        for (int r : grantResults) {
-            if (r == PackageManager.PERMISSION_DENIED) {
-                granted = false;
-                break;
-            }
-        }
-    
-        if (granted) {
-    
-            final JSONArray args =
-                pendingArgs != null ? pendingArgs : new JSONArray();
-    
-            final CallbackContext cb =
-                pendingCallback != null ? pendingCallback : callbackContext;
-    
-            cordova.getActivity().runOnUiThread(() -> {
-    
-                cordova.getThreadPool().execute(() -> {
-    
-                    try {
-                        processGetLastMedias(args);
-                    } catch (Exception e) {
-                        if (cb != null) {
-                            cb.error(e.getMessage());
-                        }
+    public void onRequestPermissionResult(int requestCode, String[] permissions, int[] grantResults) {
+        if (requestCode == PERMISSION_REQUEST_CODE) {
+            boolean allGranted = true;
+            if (grantResults.length > 0) {
+                for (int r : grantResults) {
+                    if (r != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                        allGranted = false;
+                        break;
                     }
+                }
+            } else {
+                allGranted = false;
+            }
+    
+            if (allGranted) {
+                // IMPORTANT : Utiliser le thread de Cordova pour ne pas bloquer l'UI
+                // et s'assurer que le context est toujours valide.
+                cordova.getThreadPool().execute(() -> {
+                    // Si lastArgs a été perdu durant le switch (rare mais possible), 
+                    // on utilise des valeurs par défaut.
+                    processGetLastMedias(this.lastArgs);
                 });
-            });
-    
-        } else {
-    
-            if (pendingCallback != null) {
-                pendingCallback.error("Permission denied");
+            } else {
+                if (this.callbackContext != null) {
+                    this.callbackContext.error("Permission denied");
+                }
             }
         }
-    
-        pendingAction = null;
-        pendingArgs = null;
-        pendingCallback = null;
     }
 
     /* @Override
