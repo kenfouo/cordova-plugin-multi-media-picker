@@ -142,6 +142,30 @@ public class MediaPicker extends CordovaPlugin {
 
         if ("getLastMedias".equals(action)) {
             this.callbackContext = callbackContext;
+            this.lastArgs = args;
+        
+            String[] permissions;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                permissions = new String[]{ 
+                    android.Manifest.permission.READ_MEDIA_IMAGES, 
+                    android.Manifest.permission.READ_MEDIA_VIDEO 
+                };
+            } else {
+                permissions = new String[]{ android.Manifest.permission.READ_EXTERNAL_STORAGE };
+            }
+        
+            // Si les permissions sont déjà là (accordées par un autre plugin par ex)
+            // on lance directement.
+            if (hasPermissions(permissions)) {
+                processGetLastMedias(args);
+            } else {
+                // Sinon on demande
+                cordova.requestPermissions(this, PERMISSION_REQUEST_CODE, permissions);
+            }
+            return true;
+        }
+ /*        if ("getLastMedias".equals(action)) {
+            this.callbackContext = callbackContext;
             this.lastArgs = args; // On stocke les arguments ici
 
             String[] permissions;
@@ -159,31 +183,6 @@ public class MediaPicker extends CordovaPlugin {
             } else {
                 cordova.requestPermissions(this, PERMISSION_REQUEST_CODE, permissions);
             }
-            return true;
-        }
-
-        /*         
-        if ("getLastMedias".equals(action)) {
-            JSONObject opts = args.optJSONObject(0);
-            String lastMediaType = "image";
-            int limit = 20;
-
-            if (opts != null) {
-                lastMediaType = opts.optString("mediaType", "image");
-                limit = opts.optInt("limit", 20);
-            }
-
-            final String finalMediaType = lastMediaType;
-            final int finalLimit = limit;
-
-            cordova.getThreadPool().execute(() -> {
-                try {
-                    JSONArray res = getLastMedias(finalMediaType, finalLimit);
-                    callbackContext.success(res);
-                } catch (Exception e) {
-                    callbackContext.error(e.getMessage());
-                }
-            });
             return true;
         } */
 
@@ -685,45 +684,37 @@ public class MediaPicker extends CordovaPlugin {
         });
     }
 
-    @Override
-    public void onRequestPermissionResult(int requestCode, String[] permissions, int[] grantResults) {
-        if (requestCode == PERMISSION_REQUEST_CODE) {
-    
-            boolean allGranted = true;
+@Override
+public void onRequestPermissionResult(int requestCode, String[] permissions, int[] grantResults) {
+    if (requestCode == PERMISSION_REQUEST_CODE) {
+        boolean allGranted = true;
+        if (grantResults.length > 0) {
             for (int r : grantResults) {
                 if (r == android.content.pm.PackageManager.PERMISSION_DENIED) {
                     allGranted = false;
                     break;
                 }
             }
-    
-            if (allGranted) {
-    
-                // Petit délai pour laisser Android rafraîchir MediaStore
-                cordova.getActivity().runOnUiThread(() -> {
-                    new android.os.Handler(android.os.Looper.getMainLooper())
-                        .postDelayed(() -> {
-    
-                            try {
-                                processGetLastMedias(
-                                    this.lastArgs != null ? this.lastArgs : new JSONArray()
-                                );
-                            } catch (Exception e) {
-                                callbackContext.error(
-                                    "Error after permission: " + e.getMessage()
-                                );
-                            }
-    
-                        }, 300); // 300 ms suffit généralement
-                });
-    
-            } else {
-                callbackContext.error("Permission denied by user");
-            }
-    
-            lastArgs = null;
+        } else {
+            allGranted = false;
         }
+
+        if (allGranted) {
+            // Utiliser un Runnable pour s'assurer que l'UI et le ThreadPool sont prêts
+            final JSONArray argsToUse = (this.lastArgs != null) ? this.lastArgs : new JSONArray();
+            
+            // On relance la procédure immédiatement
+            cordova.getThreadPool().execute(() -> {
+                processGetLastMedias(argsToUse);
+            });
+        } else {
+            if (this.callbackContext != null) {
+                this.callbackContext.error("Permission denied");
+            }
+        }
+        this.lastArgs = null; // Nettoyage
     }
+}    
 
 /*     @Override
     public void onRequestPermissionResult(int requestCode, String[] permissions, int[] grantResults) {
