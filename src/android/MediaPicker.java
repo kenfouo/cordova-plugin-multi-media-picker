@@ -684,8 +684,48 @@ public class MediaPicker extends CordovaPlugin {
             }
         });
     }
-    
+
     @Override
+    public void onRequestPermissionResult(int requestCode, String[] permissions, int[] grantResults) {
+        if (requestCode == PERMISSION_REQUEST_CODE) {
+    
+            boolean allGranted = true;
+            for (int r : grantResults) {
+                if (r == android.content.pm.PackageManager.PERMISSION_DENIED) {
+                    allGranted = false;
+                    break;
+                }
+            }
+    
+            if (allGranted) {
+    
+                // Petit délai pour laisser Android rafraîchir MediaStore
+                cordova.getActivity().runOnUiThread(() -> {
+                    new android.os.Handler(android.os.Looper.getMainLooper())
+                        .postDelayed(() -> {
+    
+                            try {
+                                processGetLastMedias(
+                                    this.lastArgs != null ? this.lastArgs : new JSONArray()
+                                );
+                            } catch (Exception e) {
+                                callbackContext.error(
+                                    "Error after permission: " + e.getMessage()
+                                );
+                            }
+    
+                        }, 300); // 300 ms suffit généralement
+                });
+    
+            } else {
+                callbackContext.error("Permission denied by user");
+            }
+    
+            lastArgs = null;
+        }
+    }
+
+/*     @Override
     public void onRequestPermissionResult(int requestCode, String[] permissions, int[] grantResults) {
         if (requestCode == PERMISSION_REQUEST_CODE) {
             boolean allGranted = true;
@@ -708,7 +748,7 @@ public class MediaPicker extends CordovaPlugin {
             }
             this.lastArgs = null;
         }
-    }
+    } */
 
     /*     
     @Override
