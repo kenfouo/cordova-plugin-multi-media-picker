@@ -51,6 +51,10 @@ public class MediaPicker extends CordovaPlugin {
     private ProgressBar overlaySpinner;
     private boolean isPickerOpen = false;
 
+    private String pendingAction = null;
+    private JSONArray pendingArgs = null;
+    private CallbackContext pendingCallback = null;
+
     private static final int PERMISSION_REQUEST_CODE = 2026;
     private static final String READ_EXTERNAL_STORAGE = android.Manifest.permission.READ_EXTERNAL_STORAGE;
     // Pour Android 13+ (API 33)
