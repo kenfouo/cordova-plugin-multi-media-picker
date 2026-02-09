@@ -38,7 +38,7 @@
     </config-file>
     <config-file target="AndroidManifest.xml" parent="/manifest">
       <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
-      <uses-permission android:minSdkVersion="33" android:name="android.permission.READ_MEDIA_IMAGES"/>
+      <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
       <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     </config-file>
     <source-file src="src/android/MediaPicker.java" target-dir="src/com/okanbeydanol/mediaPicker" />
