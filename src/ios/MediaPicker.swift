@@ -113,7 +113,7 @@ class MediaPicker: CDVPlugin, PHPickerViewControllerDelegate {
         candidates.append(contentsOf: provider.registeredTypeIdentifiers.compactMap { UTType($0)?.preferredMIMEType })
 
         // Add dest file UTI if available
-        if let uti = try? dest.resourceValues(forKeys: [.typeIdentifierKey]).typeIdentifier,
+        if let uti = (try? dest.resourceValues(forKeys: [.typeIdentifierKey]))?.typeIdentifier,
            let ut = UTType(uti),
            let mime = ut.preferredMIMEType {
             candidates.append(mime)
