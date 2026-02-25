@@ -31,9 +31,7 @@ class MediaPicker: CDVPlugin, PHPickerViewControllerDelegate {
             if let show = opts["showLoader"] as? Bool { showLoaderOpt = show }
             if let imageOnly = opts["imageOnly"] as? Bool { imageOnlyOpt = imageOnly }
             if let mediaType = opts["mediaType"] as? String { mediaTypeOpt = mediaType }
-            else {
-                mediaTypeOpt = imageOnlyOpt ? "images" : "all";
-            }
+            else { mediaTypeOpt = imageOnlyOpt ? "images" : "all" }
         }
 
         guard let presentingVC = self.viewController else {
@@ -49,12 +47,11 @@ class MediaPicker: CDVPlugin, PHPickerViewControllerDelegate {
         }
 
         if #available(iOS 14, *) {
-            // ✅ Ajout de photoLibrary: .shared() pour récupérer res.assetIdentifier
             var config = PHPickerConfiguration(photoLibrary: .shared())
             switch mediaTypeOpt {
             case "images": config.filter = .images
-            case "videos" : config.filter = .videos
-            default:  config.filter = .any(of: [.images, .videos])
+            case "videos": config.filter = .videos
+            default: config.filter = .any(of: [.images, .videos])
             }
 
             config.selectionLimit = selectionLimitOpt
