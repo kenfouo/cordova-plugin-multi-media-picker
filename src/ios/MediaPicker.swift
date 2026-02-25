@@ -12,10 +12,15 @@ class MediaPicker: CDVPlugin, PHPickerViewControllerDelegate {
     private var selectionLimitOpt: Int = 3
     private var showLoaderOpt: Bool = true
     private var imageOnlyOpt: Bool = false
-    private var mediaTypeOpt : String = "all" // ✅ Ajouté
+    private var mediaTypeOpt : String = "all"
 
     private weak var overlayView: UIView?
     private weak var overlaySpinner: UIActivityIndicatorView?
+
+    // Helper pour nettoyer les IDs pour le système de fichiers
+    private func getSafeId(_ identifier: String) -> String {
+        return identifier.replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: ":", with: "_")
+    }
 
     @objc(getMedias:)
     func getMedias(command: CDVInvokedUrlCommand) {
@@ -27,7 +32,6 @@ class MediaPicker: CDVPlugin, PHPickerViewControllerDelegate {
             if let imageOnly = opts["imageOnly"] as? Bool { imageOnlyOpt = imageOnly }
             if let mediaType = opts["mediaType"] as? String { mediaTypeOpt = mediaType }
             else {
-                // compatibility fallback for older versions
                 mediaTypeOpt = imageOnlyOpt ? "images" : "all";
             }
         }
@@ -38,7 +42,6 @@ class MediaPicker: CDVPlugin, PHPickerViewControllerDelegate {
             return
         }
 
-        // ✅ Prevent multiple picker presentations
         if presentingVC.presentedViewController is PHPickerViewController {
             let result = CDVPluginResult(status: .error, messageAs: "Picker is already presented")
             self.commandDelegate.send(result, callbackId: command.callbackId)
@@ -46,17 +49,13 @@ class MediaPicker: CDVPlugin, PHPickerViewControllerDelegate {
         }
 
         if #available(iOS 14, *) {
-            var config = PHPickerConfiguration()
+            // ✅ Ajout de photoLibrary: .shared() pour récupérer res.assetIdentifier
+            var config = PHPickerConfiguration(photoLibrary: .shared())
             switch mediaTypeOpt {
             case "images": config.filter = .images
-            break;
-
             case "videos" : config.filter = .videos
-            break;
-
             default:  config.filter = .any(of: [.images, .videos])
-                
-            } 
+            }
 
             config.selectionLimit = selectionLimitOpt
 
@@ -75,19 +74,15 @@ class MediaPicker: CDVPlugin, PHPickerViewControllerDelegate {
             let overlay = UIView(frame: view.bounds)
             overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             overlay.backgroundColor = UIColor.black.withAlphaComponent(0.35)
-
             let spinner = UIActivityIndicatorView(style: .large)
             spinner.startAnimating()
             spinner.translatesAutoresizingMaskIntoConstraints = false
-
             overlay.addSubview(spinner)
             view.addSubview(overlay)
-
             NSLayoutConstraint.activate([
                 spinner.centerXAnchor.constraint(equalTo: overlay.centerXAnchor),
                 spinner.centerYAnchor.constraint(equalTo: overlay.centerYAnchor)
             ])
-
             self.overlayView = overlay
             self.overlaySpinner = spinner
         }
@@ -103,31 +98,45 @@ class MediaPicker: CDVPlugin, PHPickerViewControllerDelegate {
     @available(iOS 14.0, *)
     private func resolveMime(provider: NSItemProvider, dest: URL) -> String {
         var candidates: [String] = []
-
-        // iOS 16+: use modern ContentTypes first
         if #available(iOS 16.0, *) {
             candidates.append(contentsOf: provider.registeredContentTypes.compactMap { $0.preferredMIMEType })
         }
-
-        // Always fallback to legacy identifiers
         candidates.append(contentsOf: provider.registeredTypeIdentifiers.compactMap { UTType($0)?.preferredMIMEType })
-
-        // Add dest file UTI if available
-        if let uti = (try? dest.resourceValues(forKeys: [.typeIdentifierKey]))?.typeIdentifier,
-           let ut = UTType(uti),
-           let mime = ut.preferredMIMEType {
-            candidates.append(mime)
+        do {
+            let values = try dest.resourceValues(forKeys: [.typeIdentifierKey])
+            if let uti = values.typeIdentifier,
+            let ut = UTType(uti),
+            let mime = ut.preferredMIMEType {
+                candidates.append(mime)
+            }
+        } catch {
+            // Si erreur, tu peux ignorer ou logger
         }
 
-        // Preferences
-        if candidates.contains("image/jpeg") {
-            return "image/jpeg"
-        }
-        if candidates.contains("video/mp4") {
-            return "video/mp4"
-        }
-
+        if candidates.contains("image/jpeg") { return "image/jpeg" }
+        if candidates.contains("video/mp4") { return "video/mp4" }
         return candidates.first ?? "application/octet-stream"
+    }
+
+    private func convertHEICToJPG(sourceURL: URL, index: String) throws -> URL {
+        guard let image = UIImage(contentsOfFile: sourceURL.path) else {
+            throw NSError(domain: "MediaPicker", code: -1, userInfo: [
+                NSLocalizedDescriptionKey: "Impossible de charger l'image HEIC"
+            ])
+        }
+
+        guard let jpegData = image.jpegData(compressionQuality: 0.9) else {
+            throw NSError(domain: "MediaPicker", code: -2, userInfo: [
+                NSLocalizedDescriptionKey: "Impossible de convertir en JPEG"
+            ])
+        }
+
+        let dest = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(index).jpg")
+
+        try jpegData.write(to: dest)
+
+        return dest
     }
 
     @available(iOS 14, *)
@@ -141,7 +150,6 @@ class MediaPicker: CDVPlugin, PHPickerViewControllerDelegate {
         }
 
         self.showLoader(on: picker.view)
-
         let group = DispatchGroup()
         let lock = NSLock()
         var medias: [[String: Any]] = []
@@ -154,26 +162,19 @@ class MediaPicker: CDVPlugin, PHPickerViewControllerDelegate {
         }
 
         func normalizeFileURL(_ url: URL) -> String {
-            if url.scheme?.lowercased() == "file" {
-                return url.absoluteString
-            } else {
-                return "file://\(url.path)"
-            }
+            return url.scheme?.lowercased() == "file" ? url.absoluteString : "file://\(url.path)"
         }
 
         for (tapIndex, res) in results.enumerated() {
             let provider = res.itemProvider
             let isVideo = provider.hasItemConformingToTypeIdentifier(UTType.movie.identifier)
             let isImage = provider.hasItemConformingToTypeIdentifier(UTType.image.identifier)
+            
+            // ✅ Récupération de l'ID
+            let assetId = res.assetIdentifier ?? UUID().uuidString
+            let safeId = getSafeId(assetId)
 
-            let typeIdentifier: String
-            if isVideo {
-                typeIdentifier = UTType.movie.identifier
-            } else if isImage {
-                typeIdentifier = UTType.image.identifier
-            } else {
-                typeIdentifier = provider.registeredTypeIdentifiers.first ?? UTType.data.identifier
-            }
+            let typeIdentifier = isVideo ? UTType.movie.identifier : (isImage ? UTType.image.identifier : (provider.registeredTypeIdentifiers.first ?? UTType.data.identifier))
 
             group.enter()
             provider.loadFileRepresentation(forTypeIdentifier: typeIdentifier) { (sourceURL, error) in
@@ -183,43 +184,51 @@ class MediaPicker: CDVPlugin, PHPickerViewControllerDelegate {
                     addError("Item \(tapIndex) load error: \(error.localizedDescription)")
                     return
                 }
-                guard let sourceURL = sourceURL else {
-                    addError("Item \(tapIndex) no sourceURL")
-                    return
-                }
+                guard let sourceURL = sourceURL else { return }
+                var ext = sourceURL.pathExtension.lowercased()
+                let isHEIC =
+    provider.hasItemConformingToTypeIdentifier(UTType.heic.identifier) ||
+    provider.hasItemConformingToTypeIdentifier(UTType.heif.identifier) ||
+    ext == "heic" ||
+    ext == "heif"
 
                 let fm = FileManager.default
-                let ext = sourceURL.pathExtension.isEmpty
-                    ? (isVideo ? "mov" : "jpeg")
-                    : sourceURL.pathExtension
-
-                let dest = fm.temporaryDirectory.appendingPathComponent("\(UUID().uuidString)_\(tapIndex).\(ext)")
+                var finalURL: URL
 
                 do {
-                    if fm.fileExists(atPath: dest.path) {
-                        try fm.removeItem(at: dest)
+                    // HEIC → JPG
+                    if isImage && isHEIC {
+                        finalURL = try self.convertHEICToJPG(sourceURL: sourceURL, index: safeId)
+                    } else {
+                        ext = sourceURL.pathExtension.isEmpty ? (isVideo ? "mov" : "jpg") : sourceURL.pathExtension
+                        let dest = fm.temporaryDirectory.appendingPathComponent("\(safeId).\(ext)")
+                        if !fm.fileExists(atPath: dest.path) {
+                            try fm.copyItem(at: sourceURL, to: dest)
+                        }
+                        finalURL = dest
                     }
-                    try fm.copyItem(at: sourceURL, to: dest)
-                    let normalized = normalizeFileURL(dest)
+
+                    // Ensuite ton code de construction du dictionnaire info
+                    let normalized = normalizeFileURL(finalURL)
                     var info: [String: Any] = [
+                        "id": assetId,
                         "index": tapIndex,
                         "uri": normalized,
-                        "fileName": dest.lastPathComponent,
-                        "fileSize": (try? fm.attributesOfItem(atPath: dest.path)[.size] as? Int) ?? 0
+                        "fileName": finalURL.lastPathComponent,
+                        "fileSize": (try? fm.attributesOfItem(atPath: finalURL.path)[.size] as? Int) ?? 0
                     ]
-                    info["mimeType"] = self.resolveMime(provider: provider, dest: dest)
-                    if isImage {
+                    if isImage && isHEIC { info["mimeType"] = "image/jpeg" }
+                    else { info["mimeType"] = self.resolveMime(provider: provider, dest: finalURL) }
+
+                    // Image / vidéo
+                    if isImage, let img = UIImage(contentsOfFile: finalURL.path) {
                         info["type"] = "image"
-                        if let img = UIImage(contentsOfFile: dest.path) {
-                            info["width"] = Int(img.size.width)
-                            info["height"] = Int(img.size.height)
-                        }
+                        info["width"] = Int(img.size.width)
+                        info["height"] = Int(img.size.height)
                     } else if isVideo {
                         info["type"] = "video"
-                        let asset = AVAsset(url: dest)
-                        let duration = CMTimeGetSeconds(asset.duration)
-                        info["duration"] = duration
-
+                        let asset = AVAsset(url: finalURL)
+                        info["duration"] = CMTimeGetSeconds(asset.duration)
                         if let track = asset.tracks(withMediaType: .video).first {
                             let size = track.naturalSize.applying(track.preferredTransform)
                             info["width"] = Int(abs(size.width))
@@ -228,6 +237,7 @@ class MediaPicker: CDVPlugin, PHPickerViewControllerDelegate {
                     } else {
                         info["type"] = "other"
                     }
+
                     lock.lock()
                     medias.append(info)
                     lock.unlock()
@@ -239,18 +249,13 @@ class MediaPicker: CDVPlugin, PHPickerViewControllerDelegate {
 
         group.notify(queue: .main) {
             self.hideLoader()
-
             picker.dismiss(animated: true) {
                 if !errorMessages.isEmpty {
-                    let result = CDVPluginResult(status: .error, messageAs: errorMessages.joined(separator: "\n"))
-                    self.commandDelegate.send(result, callbackId: self.commandCallbackId)
+                    self.commandDelegate.send(CDVPluginResult(status: .error, messageAs: errorMessages.joined(separator: "\n")), callbackId: self.commandCallbackId)
                     return
                 }
-
                 let sorted = medias.sorted { ($0["index"] as? Int ?? 0) < ($1["index"] as? Int ?? 0) }
-
-                let result = CDVPluginResult(status: .ok, messageAs: sorted)
-                self.commandDelegate.send(result, callbackId: self.commandCallbackId)
+                self.commandDelegate.send(CDVPluginResult(status: .ok, messageAs: sorted), callbackId: self.commandCallbackId)
             }
         }
     }
@@ -258,56 +263,32 @@ class MediaPicker: CDVPlugin, PHPickerViewControllerDelegate {
     @objc(getExifForKey:)
     func getExifForKey(command: CDVInvokedUrlCommand) {
         guard let path = command.argument(at: 0) as? String else {
-            let result = CDVPluginResult(status: .error, messageAs: "Path is missing")
-            self.commandDelegate.send(result, callbackId: command.callbackId)
+            self.commandDelegate.send(CDVPluginResult(status: .error, messageAs: "Path is missing"), callbackId: command.callbackId)
             return
         }
-        
-        // Si la clé est absente, vide ou NSNull, on renvoie un JSON vide directement
         guard let key = command.argument(at: 1) as? String, !key.isEmpty else {
-            let result = CDVPluginResult(status: .ok, messageAs: "Exif key is required")
-            self.commandDelegate.send(result, callbackId: command.callbackId)
+            self.commandDelegate.send(CDVPluginResult(status: .ok, messageAs: "Exif key is required"), callbackId: command.callbackId)
             return
         }
-        
         self.commandDelegate.run {
             let cleanPath = path.replacingOccurrences(of: "file://", with: "")
             let fileURL = URL(fileURLWithPath: cleanPath)
             let isVideo = ["mp4", "mov", "m4v", "3gp"].contains(fileURL.pathExtension.lowercased())
-            
             var foundValue: Any? = nil
-            
             if isVideo {
-                // Recherche ciblée dans les métadonnées vidéo
                 let asset = AVAsset(url: fileURL)
                 foundValue = asset.commonMetadata.first(where: { $0.commonKey?.rawValue == key })?.value
             } else {
-                // Recherche ciblée dans les métadonnées image
                 if let imageSource = CGImageSourceCreateWithURL(fileURL as CFURL, nil),
                 let props = CGImageSourceCopyPropertiesAtIndex(imageSource, 0, nil) as? [String: Any] {
-                    
-                    if let val = props[key] {
-                        foundValue = val
-                    } else if let exif = props[kCGImagePropertyExifDictionary as String] as? [String: Any], let val = exif[key] {
-                        foundValue = val
-                    } else if let tiff = props[kCGImagePropertyTIFFDictionary as String] as? [String: Any], let val = tiff[key] {
-                        foundValue = val
-                    } else if let gps = props[kCGImagePropertyGPSDictionary as String] as? [String: Any], let val = gps[key] {
-                        foundValue = val
-                    }
+                    if let val = props[key] { foundValue = val }
+                    else if let exif = props[kCGImagePropertyExifDictionary as String] as? [String: Any], let val = exif[key] { foundValue = val }
+                    else if let tiff = props[kCGImagePropertyTIFFDictionary as String] as? [String: Any], let val = tiff[key] { foundValue = val }
+                    else if let gps = props[kCGImagePropertyGPSDictionary as String] as? [String: Any], let val = gps[key] { foundValue = val }
                 }
             }
-            
-            // Construction du résultat (Valeur seule ou {} si rien trouvé)
-            let pluginResult: CDVPluginResult
-            if let data = foundValue {
-                // On renvoie la valeur dans son type natif (String, Int, etc.)
-                pluginResult = CDVPluginResult(status: .ok, messageAs: "\(data)")
-            } else {
-                pluginResult = CDVPluginResult(status: .ok, messageAs: [:])
-            }
-            
-            self.commandDelegate.send(pluginResult, callbackId: command.callbackId)
+            let res = foundValue != nil ? CDVPluginResult(status: .ok, messageAs: "\(foundValue!)") : CDVPluginResult(status: .ok, messageAs: [:])
+            self.commandDelegate.send(res, callbackId: command.callbackId)
         }
     }
 
@@ -317,10 +298,8 @@ class MediaPicker: CDVPlugin, PHPickerViewControllerDelegate {
             let opts = command.argument(at: 0) as? [String: Any] ?? [:]
             let limit = opts["limit"] as? Int ?? 20
             let offset = opts["offset"] as? Int ?? 0
-            let mediaType = opts["mediaType"] as? String ?? "all" // "images", "videos", "all"
-
+            let mediaType = opts["mediaType"] as? String ?? "all"
             let status = PHPhotoLibrary.authorizationStatus()
-            
             if status == .authorized || status == .limited {
                 self.fetchMediasWithPagination(command: command, limit: limit, offset: offset, mediaType: mediaType)
             } else {
@@ -339,20 +318,13 @@ class MediaPicker: CDVPlugin, PHPickerViewControllerDelegate {
         var assetsList: [[String: Any]] = []
         let fetchOptions = PHFetchOptions()
         fetchOptions.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
-        
-        // ✅ Filtrage selon le mediaType
         let allAssets: PHFetchResult<PHAsset>
-        if mediaType == "images" {
-            allAssets = PHAsset.fetchAssets(with: .image, options: fetchOptions)
-        } else if mediaType == "videos" {
-            allAssets = PHAsset.fetchAssets(with: .video, options: fetchOptions)
-        } else {
-            allAssets = PHAsset.fetchAssets(with: fetchOptions)
-        }
+        if mediaType == "images" { allAssets = PHAsset.fetchAssets(with: .image, options: fetchOptions) }
+        else if mediaType == "videos" { allAssets = PHAsset.fetchAssets(with: .video, options: fetchOptions) }
+        else { allAssets = PHAsset.fetchAssets(with: fetchOptions) }
 
         let totalCount = allAssets.count
         let endIndex = min(offset + limit, totalCount)
-        
         if offset >= totalCount {
             self.commandDelegate.send(CDVPluginResult(status: .ok, messageAs: []), callbackId: command.callbackId)
             return
@@ -365,8 +337,12 @@ class MediaPicker: CDVPlugin, PHPickerViewControllerDelegate {
 
         for i in offset..<endIndex {
             let asset = allAssets.object(at: i)
+            let assetId = asset.localIdentifier
+            let safeId = getSafeId(assetId)
+
             var mediaInfo: [String: Any] = [
-                "index": asset.localIdentifier,
+                "id": assetId, // ✅ Ajouté
+                "index": assetId,
                 "width": asset.pixelWidth,
                 "height": asset.pixelHeight,
                 "creationDate": asset.creationDate?.description ?? "",
@@ -375,54 +351,46 @@ class MediaPicker: CDVPlugin, PHPickerViewControllerDelegate {
 
             if asset.mediaType == .video {
                 mediaInfo["duration"] = asset.duration
-                let videoOptions = PHVideoRequestOptions()
-                videoOptions.isNetworkAccessAllowed = true
+                let thumbName = "thumb_\(safeId).jpg"
+                let thumbURL = tempDir.appendingPathComponent(thumbName)
                 
-                // --- Génération de la miniature ---
-                let thumbOptions = PHImageRequestOptions()
-                thumbOptions.isSynchronous = true // On peut rester synchrone ici car c'est rapide pour une miniature
-                thumbOptions.deliveryMode = .highQualityFormat
-                
-                // On demande une taille raisonnable pour la grille (ex: 300x300)
-                manager.requestImage(for: asset, targetSize: CGSize(width: 300, height: 300), contentMode: .aspectFill, options: thumbOptions) { (image, info) in
-                    if let image = image, let data = image.jpegData(compressionQuality: 0.8) {
-                        let thumbName = "thumb_\(UUID().uuidString).jpg"
-                        let thumbURL = tempDir.appendingPathComponent(thumbName)
-                        try? data.write(to: thumbURL)
-                        mediaInfo["thumbnail"] = "file://\(thumbURL.path)"
+                if !fm.fileExists(atPath: thumbURL.path) {
+                    let thumbOptions = PHImageRequestOptions(); thumbOptions.isSynchronous = true
+                    manager.requestImage(for: asset, targetSize: CGSize(width: 300, height: 300), contentMode: .aspectFill, options: thumbOptions) { (image, _) in
+                        if let data = image?.jpegData(compressionQuality: 0.8) { try? data.write(to: thumbURL) }
                     }
                 }
-                
-                manager.requestAVAsset(forVideo: asset, options: videoOptions) { (avAsset, audioMix, info) in
-                    if let urlAsset = avAsset as? AVURLAsset {
-                        let ext = urlAsset.url.pathExtension
-                        let destURL = tempDir.appendingPathComponent("\(UUID().uuidString).\(ext)")
-                        try? fm.copyItem(at: urlAsset.url, to: destURL)
-                        mediaInfo["uri"] = "file://\(destURL.path)"
-                    }
+                mediaInfo["thumbnail"] = "file://\(thumbURL.path)"
+
+                let destURL = tempDir.appendingPathComponent("\(safeId).mov")
+                if fm.fileExists(atPath: destURL.path) {
+                    mediaInfo["uri"] = "file://\(destURL.path)"
                     semaphore.signal()
+                } else {
+                    let vOpts = PHVideoRequestOptions(); vOpts.isNetworkAccessAllowed = true
+                    manager.requestAVAsset(forVideo: asset, options: vOpts) { (avAsset, _, _) in
+                        if let urlAsset = avAsset as? AVURLAsset { try? fm.copyItem(at: urlAsset.url, to: destURL) }
+                        mediaInfo["uri"] = "file://\(destURL.path)"
+                        semaphore.signal()
+                    }
                 }
             } else {
-                let imgOptions = PHImageRequestOptions()
-                imgOptions.isSynchronous = false
-                imgOptions.isNetworkAccessAllowed = true
-                
-                manager.requestImageDataAndOrientation(for: asset, options: imgOptions) { (data, uti, orientation, info) in
-                    if let data = data {
-                        let ext = UTType(uti ?? "")?.preferredFilenameExtension ?? "jpg"
-                        let destURL = tempDir.appendingPathComponent("\(UUID().uuidString).\(ext)")
-                        try? data.write(to: destURL)
-                        mediaInfo["uri"] = "file://\(destURL.path)"
-                    }
+                let destURL = tempDir.appendingPathComponent("\(safeId).jpg")
+                if fm.fileExists(atPath: destURL.path) {
+                    mediaInfo["uri"] = "file://\(destURL.path)"
                     semaphore.signal()
+                } else {
+                    let iOpts = PHImageRequestOptions(); iOpts.isNetworkAccessAllowed = true
+                    manager.requestImageDataAndOrientation(for: asset, options: iOpts) { (data, _, _, _) in
+                        if let data = data { try? data.write(to: destURL) }
+                        mediaInfo["uri"] = "file://\(destURL.path)"
+                        semaphore.signal()
+                    }
                 }
             }
-            
             semaphore.wait()
             assetsList.append(mediaInfo)
         }
-
-        let result = CDVPluginResult(status: .ok, messageAs: assetsList)
-        self.commandDelegate.send(result, callbackId: command.callbackId)
+        self.commandDelegate.send(CDVPluginResult(status: .ok, messageAs: assetsList), callbackId: command.callbackId)
     }
 }
