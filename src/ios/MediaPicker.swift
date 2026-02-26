@@ -3,6 +3,8 @@ import PhotosUI
 import UniformTypeIdentifiers
 import UIKit
 import AVFoundation
+import ImageIO
+import MobileCoreServices
 
 @objc(MediaPicker)
 class MediaPicker: CDVPlugin, PHPickerViewControllerDelegate {
@@ -115,27 +117,84 @@ class MediaPicker: CDVPlugin, PHPickerViewControllerDelegate {
         return candidates.first ?? "application/octet-stream"
     }
 
-    private func convertHEICToJPG(sourceURL: URL, index: String) throws -> URL {
-        guard let image = UIImage(contentsOfFile: sourceURL.path) else {
-            throw NSError(domain: "MediaPicker", code: -1, userInfo: [
-                NSLocalizedDescriptionKey: "Impossible de charger l'image HEIC"
-            ])
-        }
+//    private func convertHEICToJPG(sourceURL: URL, index: String) throws -> URL {
+//        guard let image = UIImage(contentsOfFile: sourceURL.path) else {
+//            throw NSError(domain: "MediaPicker", code: -1, userInfo: [
+//                NSLocalizedDescriptionKey: "Impossible de charger l'image HEIC"
+//            ])
+//        }
+//
+//        guard let jpegData = image.jpegData(compressionQuality: 0.9) else {
+//            throw NSError(domain: "MediaPicker", code: -2, userInfo: [
+//                NSLocalizedDescriptionKey: "Impossible de convertir en JPEG"
+//            ])
+//        }
+//
+//        let dest = FileManager.default.temporaryDirectory
+//            .appendingPathComponent("\(index).jpg")
+//
+//        try jpegData.write(to: dest)
+//
+//        return dest
+//    }
+    
+//    private func convertHEICToJPG(sourceURL: URL, index: String) throws -> URL {
+//        guard let imageSource = CGImageSourceCreateWithURL(sourceURL as CFURL, nil) else {
+//            throw NSError(domain: "MediaPicker", code: -1, userInfo: [NSLocalizedDescriptionKey: "Impossible d'ouvrir le fichier source"])
+//        }
+//
+//        let dest = FileManager.default.temporaryDirectory
+//            .appendingPathComponent("\(index).jpg")
+//
+//        guard let imageDestination = CGImageDestinationCreateWithURL(dest as CFURL, UTType.jpeg.identifier as CFString, 1, nil) else {
+//            throw NSError(domain: "MediaPicker", code: -2, userInfo: [NSLocalizedDescriptionKey: "Impossible de créer la destination JPEG"])
+//        }
+//
+//        // Copier l'image source en préservant éventuellement les métadonnées
+//        CGImageDestinationAddImageFromSource(imageDestination, imageSource, 0, nil)
+//
+//        if CGImageDestinationFinalize(imageDestination) {
+//            return dest
+//        } else {
+//            throw NSError(domain: "MediaPicker", code: -3, userInfo: [NSLocalizedDescriptionKey: "Échec de l'écriture du JPEG"])
+//        }
+//    }
 
-        guard let jpegData = image.jpegData(compressionQuality: 0.9) else {
-            throw NSError(domain: "MediaPicker", code: -2, userInfo: [
-                NSLocalizedDescriptionKey: "Impossible de convertir en JPEG"
-            ])
-        }
 
-        let dest = FileManager.default.temporaryDirectory
-            .appendingPathComponent("\(index).jpg")
+//
+//    private func convertHEICToJPG(sourceURL: URL, index: String) throws -> URL {
+//        // 1. Création de la destination
+//        let destURL = FileManager.default.temporaryDirectory
+//            .appendingPathComponent("\(index).jpg")
+//
+//        // 2. Initialisation de la source ImageIO
+//        guard let source = CGImageSourceCreateWithURL(sourceURL as CFURL, nil) else {
+//            throw NSError(domain: "MediaPicker", code: -1, userInfo: [NSLocalizedDescriptionKey: "Source HEIC invalide"])
+//        }
+//
+//        // 3. Spécification du format de sortie (JPEG)
+//        guard let destination = CGImageDestinationCreateWithURL(destURL as CFURL, kUTTypeJPEG, 1, nil) else {
+//            throw NSError(domain: "MediaPicker", code: -2, userInfo: [NSLocalizedDescriptionKey: "Échec création destination JPG"])
+//        }
+//
+//        // 4. Options de compression et conservation des métadonnées
+//        let options: [CFString: Any] = [
+//            kCGImageDestinationLossyCompressionQuality: 0.3
+//        ]
+//
+//        // Ajout de l'image à la destination
+//        CGImageDestinationAddImageFromSource(destination, source, 0, options as CFDictionary)
+//
+//        // Finalisation de l'écriture sur le disque
+//        if !CGImageDestinationFinalize(destination) {
+//            throw NSError(domain: "MediaPicker", code: -3, userInfo: [NSLocalizedDescriptionKey: "Échec de l'écriture finale"])
+//        }
+//
+//        return destURL
+//    }
+    
 
-        try jpegData.write(to: dest)
-
-        return dest
-    }
-
+    
     @available(iOS 14, *)
     func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
         if results.isEmpty {
@@ -311,83 +370,333 @@ class MediaPicker: CDVPlugin, PHPickerViewControllerDelegate {
         }
     }
 
+//    private func fetchMediasWithPagination(command: CDVInvokedUrlCommand, limit: Int, offset: Int, mediaType: String) {
+//        var assetsList: [[String: Any]] = []
+//        let fetchOptions = PHFetchOptions()
+//        fetchOptions.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+//        let allAssets: PHFetchResult<PHAsset>
+//        if mediaType == "images" { allAssets = PHAsset.fetchAssets(with: .image, options: fetchOptions) }
+//        else if mediaType == "videos" { allAssets = PHAsset.fetchAssets(with: .video, options: fetchOptions) }
+//        else { allAssets = PHAsset.fetchAssets(with: fetchOptions) }
+//
+//        let totalCount = allAssets.count
+//        let endIndex = min(offset + limit, totalCount)
+//        if offset >= totalCount {
+//            self.commandDelegate.send(CDVPluginResult(status: .ok, messageAs: []), callbackId: command.callbackId)
+//            return
+//        }
+//
+//        let manager = PHImageManager.default()
+//        let fm = FileManager.default
+//        let tempDir = fm.temporaryDirectory
+//        let semaphore = DispatchSemaphore(value: 0)
+//
+//        for i in offset..<endIndex {
+//            let asset = allAssets.object(at: i)
+//            let assetId = asset.localIdentifier
+//            let safeId = getSafeId(assetId)
+//
+//            var mediaInfo: [String: Any] = [
+//                "id": assetId, // ✅ Ajouté
+//                "index": assetId,
+//                "width": asset.pixelWidth,
+//                "height": asset.pixelHeight,
+//                "creationDate": asset.creationDate?.description ?? "",
+//                "type": asset.mediaType == .video ? "video" : "image"
+//            ]
+//
+//            if asset.mediaType == .video {
+//                mediaInfo["duration"] = asset.duration
+//                let thumbName = "thumb_\(safeId).jpg"
+//                let thumbURL = tempDir.appendingPathComponent(thumbName)
+//
+//                if !fm.fileExists(atPath: thumbURL.path) {
+//                    let thumbOptions = PHImageRequestOptions(); thumbOptions.isSynchronous = true
+//                    manager.requestImage(for: asset, targetSize: CGSize(width: 300, height: 300), contentMode: .aspectFill, options: thumbOptions) { (image, _) in
+//                        if let data = image?.jpegData(compressionQuality: 0.8) { try? data.write(to: thumbURL) }
+//                    }
+//                }
+//                mediaInfo["thumbnail"] = "file://\(thumbURL.path)"
+//
+//                let destURL = tempDir.appendingPathComponent("\(safeId).mov")
+//                if fm.fileExists(atPath: destURL.path) {
+//                    mediaInfo["uri"] = "file://\(destURL.path)"
+//                    semaphore.signal()
+//                } else {
+//                    let vOpts = PHVideoRequestOptions(); vOpts.isNetworkAccessAllowed = true
+//                    manager.requestAVAsset(forVideo: asset, options: vOpts) { (avAsset, _, _) in
+//                        if let urlAsset = avAsset as? AVURLAsset { try? fm.copyItem(at: urlAsset.url, to: destURL) }
+//                        mediaInfo["uri"] = "file://\(destURL.path)"
+//                        semaphore.signal()
+//                    }
+//                }
+//            }else {
+//
+//                // 🔹 Récupère l'extension originale
+//                var fileExtension = "jpg" // fallback
+//
+//                let resources = PHAssetResource.assetResources(for: asset)
+//                if let resource = resources.first {
+//                    let originalName = resource.originalFilename
+//                    let ext = (originalName as NSString).pathExtension
+//                    if !ext.isEmpty {
+//                        fileExtension = ext.lowercased()
+//                    }
+//                }
+//
+//                // 🔹 Destination avec vraie extension
+//                let destURL = tempDir.appendingPathComponent("\(safeId).\(fileExtension)")
+//
+//                // Si déjà en cache
+//                if fm.fileExists(atPath: destURL.path) {
+//                    mediaInfo["uri"] = "file://\(destURL.path)"
+//                    semaphore.signal()
+//                }
+//                else {
+//
+//                    let iOpts = PHImageRequestOptions()
+//                    iOpts.isNetworkAccessAllowed = true
+//                    iOpts.version = .current
+//                    iOpts.deliveryMode = .highQualityFormat
+//
+//                    manager.requestImageDataAndOrientation(for: asset, options: iOpts) {
+//                        (data, _, _, _) in
+//
+//                        if let data = data {
+//                            try? data.write(to: destURL)
+//                        }
+//
+//                        mediaInfo["uri"] = "file://\(destURL.path)"
+//                        semaphore.signal()
+//                    }
+//                }
+//            }
+//            semaphore.wait()
+//            assetsList.append(mediaInfo)
+//        }
+//        self.commandDelegate.send(CDVPluginResult(status: .ok, messageAs: assetsList), callbackId: command.callbackId)
+//    }
+    
     private func fetchMediasWithPagination(command: CDVInvokedUrlCommand, limit: Int, offset: Int, mediaType: String) {
+        
+        // Tableau qui contiendra toutes les informations des médias à retourner
         var assetsList: [[String: Any]] = []
+        
+        // Configuration des options de récupération des photos
         let fetchOptions = PHFetchOptions()
+        // Tri par date de création, du plus récent au plus ancien
         fetchOptions.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+        
+        // Récupération des assets (photos/vidéos) selon le type demandé
         let allAssets: PHFetchResult<PHAsset>
-        if mediaType == "images" { allAssets = PHAsset.fetchAssets(with: .image, options: fetchOptions) }
-        else if mediaType == "videos" { allAssets = PHAsset.fetchAssets(with: .video, options: fetchOptions) }
-        else { allAssets = PHAsset.fetchAssets(with: fetchOptions) }
+        if mediaType == "images" {
+            // Récupère uniquement les images
+            allAssets = PHAsset.fetchAssets(with: .image, options: fetchOptions)
+        } else if mediaType == "videos" {
+            // Récupère uniquement les vidéos
+            allAssets = PHAsset.fetchAssets(with: .video, options: fetchOptions)
+        } else {
+            // Récupère tous les médias (images et vidéos)
+            allAssets = PHAsset.fetchAssets(with: fetchOptions)
+        }
 
-        let totalCount = allAssets.count
-        let endIndex = min(offset + limit, totalCount)
+        // Calcul pour la pagination
+        let totalCount = allAssets.count               // Nombre total de médias
+        let endIndex = min(offset + limit, totalCount) // Index de fin pour cette page
+        
+        // Si l'offset dépasse le nombre total, retourne un tableau vide
         if offset >= totalCount {
             self.commandDelegate.send(CDVPluginResult(status: .ok, messageAs: []), callbackId: command.callbackId)
             return
         }
 
+        // Gestionnaire pour récupérer les images/vidéos de la photothèque
         let manager = PHImageManager.default()
         let fm = FileManager.default
-        let tempDir = fm.temporaryDirectory
-        let semaphore = DispatchSemaphore(value: 0)
+        let tempDir = fm.temporaryDirectory                // Dossier temporaire pour stocker les fichiers
+        let semaphore = DispatchSemaphore(value: 0)        // Sémaphore pour synchroniser les opérations asynchrones
 
+        // Parcourt les médias de la page courante (de offset à endIndex)
         for i in offset..<endIndex {
-            let asset = allAssets.object(at: i)
-            let assetId = asset.localIdentifier
-            let safeId = getSafeId(assetId)
+            let asset = allAssets.object(at: i)            // Récupère l'asset à l'index i
+            let assetId = asset.localIdentifier            // Identifiant unique de l'asset
+            let safeId = getSafeId(assetId)                 // Identifiant "sécurisé" pour nom de fichier
 
+            // Informations de base communes à tous les médias
             var mediaInfo: [String: Any] = [
-                "id": assetId, // ✅ Ajouté
-                "index": assetId,
-                "width": asset.pixelWidth,
-                "height": asset.pixelHeight,
-                "creationDate": asset.creationDate?.description ?? "",
-                "type": asset.mediaType == .video ? "video" : "image"
+                "id": assetId,                              // ID unique de l'asset
+                "index": assetId,                           // Note: semble redondant avec id
+                "width": asset.pixelWidth,                   // Largeur en pixels
+                "height": asset.pixelHeight,                 // Hauteur en pixels
+                "creationDate": asset.creationDate?.description ?? "", // Date de création
+                "type": asset.mediaType == .video ? "video" : "image"  // Type de média
             ]
 
+            // Traitement spécifique pour les vidéos
             if asset.mediaType == .video {
-                mediaInfo["duration"] = asset.duration
+                mediaInfo["duration"] = asset.duration       // Durée de la vidéo en secondes
+                
+                // Génération d'une miniature
                 let thumbName = "thumb_\(safeId).jpg"
                 let thumbURL = tempDir.appendingPathComponent(thumbName)
                 
+                // Si la miniature n'existe pas déjà, on la crée
                 if !fm.fileExists(atPath: thumbURL.path) {
-                    let thumbOptions = PHImageRequestOptions(); thumbOptions.isSynchronous = true
-                    manager.requestImage(for: asset, targetSize: CGSize(width: 300, height: 300), contentMode: .aspectFill, options: thumbOptions) { (image, _) in
-                        if let data = image?.jpegData(compressionQuality: 0.8) { try? data.write(to: thumbURL) }
+                    let thumbOptions = PHImageRequestOptions()
+                    thumbOptions.isSynchronous = true        // Mode synchrone pour attendre le résultat
+                    
+                    // Demande une image redimensionnée à 300x300
+                    manager.requestImage(for: asset, targetSize: CGSize(width: 300, height: 300),
+                                       contentMode: .aspectFill, options: thumbOptions) { (image, _) in
+                        // Convertit l'image en JPEG avec qualité 80% et la sauvegarde
+                        if let data = image?.jpegData(compressionQuality: 0.8) {
+                            try? data.write(to: thumbURL)
+                        }
                     }
                 }
-                mediaInfo["thumbnail"] = "file://\(thumbURL.path)"
+                mediaInfo["thumbnail"] = "file://\(thumbURL.path)"  // URI de la miniature
 
+                // Récupération de la vidéo elle-même
                 let destURL = tempDir.appendingPathComponent("\(safeId).mov")
+                
+                // Si la vidéo est déjà dans le cache temporaire
                 if fm.fileExists(atPath: destURL.path) {
-                    mediaInfo["uri"] = "file://\(destURL.path)"
-                    semaphore.signal()
+                    mediaInfo["uri"] = "file://\(destURL.path)"  // URI de la vidéo
+                    semaphore.signal()  // Signale que l'opération est terminée
                 } else {
-                    let vOpts = PHVideoRequestOptions(); vOpts.isNetworkAccessAllowed = true
+                    // Sinon, on la récupère depuis la photothèque
+                    let vOpts = PHVideoRequestOptions()
+                    vOpts.isNetworkAccessAllowed = true  // Permet de télécharger depuis iCloud si nécessaire
+                    
                     manager.requestAVAsset(forVideo: asset, options: vOpts) { (avAsset, _, _) in
-                        if let urlAsset = avAsset as? AVURLAsset { try? fm.copyItem(at: urlAsset.url, to: destURL) }
-                        mediaInfo["uri"] = "file://\(destURL.path)"
-                        semaphore.signal()
-                    }
-                }
-            } else {
-                let destURL = tempDir.appendingPathComponent("\(safeId).jpg")
-                if fm.fileExists(atPath: destURL.path) {
-                    mediaInfo["uri"] = "file://\(destURL.path)"
-                    semaphore.signal()
-                } else {
-                    let iOpts = PHImageRequestOptions(); iOpts.isNetworkAccessAllowed = true
-                    manager.requestImageDataAndOrientation(for: asset, options: iOpts) { (data, _, _, _) in
-                        if let data = data { try? data.write(to: destURL) }
-                        mediaInfo["uri"] = "file://\(destURL.path)"
-                        semaphore.signal()
+                        // Si c'est un asset local (AVURLAsset), on le copie dans le dossier temporaire
+                        if let urlAsset = avAsset as? AVURLAsset {
+                            try? fm.copyItem(at: urlAsset.url, to: destURL)
+                        }
+                        mediaInfo["uri"] = "file://\(destURL.path)"  // URI de la vidéo
+                        semaphore.signal()  // Signale que l'opération est terminée
                     }
                 }
             }
+            // Traitement pour les images
+            else {
+                // On utilise toujours .jpg comme extension finale
+                var destURL = tempDir.appendingPathComponent("\(safeId).jpg")
+                
+                // Si l'image est déjà dans le cache temporaire
+                if fm.fileExists(atPath: destURL.path) {
+                    mediaInfo["uri"] = "file://\(destURL.path)"  // URI de l'image
+                    semaphore.signal()  // Signale que l'opération est terminée
+                } else {
+                    // Sinon, on la récupère depuis la photothèque
+                    let iOpts = PHImageRequestOptions()
+                    iOpts.isNetworkAccessAllowed = true  // Permet de télécharger depuis iCloud
+                    iOpts.isSynchronous = true           // Mode synchrone pour avoir les données immédiatement
+                    
+                    // Demande les données brutes de l'image
+                    manager.requestImageDataAndOrientation(for: asset, options: iOpts) { (data, uti, _, _) in
+                        
+                        guard let imageData = data else {
+                            semaphore.signal()
+                            return
+                        }
+                        
+                        // Vérification du format original via l'UTI
+                        let originalFormat = uti as? String ?? ""
+                        let isHEIC = originalFormat.lowercased().contains("heic") ||
+                                     originalFormat.lowercased().contains("heif")
+                        
+                        
+                        do {
+                            if isHEIC {
+                                // Sauvegarder temporairement le fichier HEIC pour le convertir
+                                let heicTempURL = tempDir.appendingPathComponent("\(safeId)_temp.heic")
+                                try imageData.write(to: heicTempURL)
+                                
+                                // Conversion HEIC → JPG en utilisant votre fonction
+                                let convertedURL = try self.convertHEICToJPG(sourceURL: heicTempURL, index: safeId)
+                                
+                                // Nettoyer le fichier temporaire HEIC
+                                try? fm.removeItem(at: heicTempURL)
+                                
+                                mediaInfo["uri"] = "file://\(convertedURL.path)"
+                                
+                            } else {
+
+                                // 🔹 Récupère l'extension originale
+                                var fileExtension = "jpg" // fallback
+                
+                                let resources = PHAssetResource.assetResources(for: asset)
+                                if let resource = resources.first {
+                                    let originalName = resource.originalFilename
+                                    let ext = (originalName as NSString).pathExtension
+                                    if !ext.isEmpty {
+                                        fileExtension = ext.lowercased()
+                                    }
+                                }
+                                
+                                // 🔹 Destination avec vraie extension
+                                destURL = tempDir.appendingPathComponent("\(safeId).\(fileExtension)")
+                                
+                                try imageData.write(to: destURL)
+                                mediaInfo["uri"] = "file://\(destURL.path)"
+                                
+                            }
+                        } catch {
+                            
+                            // En cas d'erreur, on tente de sauvegarder les données brutes
+                            try? imageData.write(to: destURL)
+                            mediaInfo["uri"] = "file://\(destURL.path)"
+                        }
+                        
+                        semaphore.signal()  // Signale que l'opération est terminée
+                    }
+                }
+            }
+            
+            // Attend que l'opération asynchrone (récupération image/vidéo) soit terminée
             semaphore.wait()
+            
+            // Ajoute les informations du média à la liste
             assetsList.append(mediaInfo)
         }
+        
+        // Envoie la liste complète des médias au callback Cordova
         self.commandDelegate.send(CDVPluginResult(status: .ok, messageAs: assetsList), callbackId: command.callbackId)
     }
+
+    // Votre fonction de conversion HEIC vers JPG (avec qualité ajustable)
+    private func convertHEICToJPG(sourceURL: URL, index: String, compressionQuality: CGFloat = 0.8) throws -> URL {
+        // 1. Création de la destination
+        let destURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(index).jpg")
+
+        // 2. Initialisation de la source ImageIO
+        guard let source = CGImageSourceCreateWithURL(sourceURL as CFURL, nil) else {
+            throw NSError(domain: "MediaPicker", code: -1, userInfo: [NSLocalizedDescriptionKey: "Source HEIC invalide"])
+        }
+
+        // 3. Spécification du format de sortie (JPEG)
+        guard let destination = CGImageDestinationCreateWithURL(destURL as CFURL, kUTTypeJPEG, 1, nil) else {
+            throw NSError(domain: "MediaPicker", code: -2, userInfo: [NSLocalizedDescriptionKey: "Échec création destination JPG"])
+        }
+
+        // 4. Options de compression et conservation des métadonnées
+        let options: [CFString: Any] = [
+            kCGImageDestinationLossyCompressionQuality: compressionQuality  // Qualité paramétrable
+        ]
+
+        // Ajout de l'image à la destination
+        CGImageDestinationAddImageFromSource(destination, source, 0, options as CFDictionary)
+
+        // Finalisation de l'écriture sur le disque
+        if !CGImageDestinationFinalize(destination) {
+            throw NSError(domain: "MediaPicker", code: -3, userInfo: [NSLocalizedDescriptionKey: "Échec de l'écriture finale"])
+        }
+
+        return destURL
+    }
 }
+
+
+
